@@ -1,0 +1,38 @@
+{
+  "name": "daftar-ledger-backend",
+  "version": "1.0.0",
+  "description": "Backend API for Daftar — a ledger for Afghan sarafs (money exchangers): hawala transfers, customer accounts, FX trading, multi-asset cash drawer, P&L and statements.",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "migrate": "node scripts/migrate.js",
+    "seed": "node scripts/seed.js",
+    "seed:demo": "node scripts/seed.js --demo",
+    "test": "node --test 'tests/**/*.test.js'"
+  },
+  "keywords": [
+    "ledger",
+    "hawala",
+    "saraf",
+    "fx",
+    "postgres",
+    "express"
+  ],
+  "license": "UNLICENSED",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.0",
+    "pg": "^8.12.0",
+    "zod": "^3.23.8"
+  }
+}
