@@ -56,11 +56,20 @@ export function weightedAverageCost(trades, currency) {
 
 /**
  * Realized P&L (AFN) for disposing `fromAmount` of a held currency:
- * proceeds (AFN value of the to-leg) minus average cost of the disposed lot.
+ * proceeds (AFN value of the to-leg) minus the cost of the disposed lot.
  * Returns null for acquisitions (buys from AFN) — nothing is realized.
+ *
+ * The lot is costed at the weighted average for whatever quantity the FX
+ * trade history covers; any remainder (stock that entered the drawer via
+ * initial setup or investments, so it has no trade-history basis) is costed
+ * at the current market rate — realizing only the spread vs market instead
+ * of booking the whole proceeds as profit.
  */
-export function computeRealizedPl({ fromCur, fromAmount, priorTrades, proceedsAfn }) {
+export function computeRealizedPl({ fromCur, fromAmount, priorTrades, proceedsAfn, marketRateAfn }) {
   if (fromCur === BASE_ASSET) return null;
-  const { avgCost } = weightedAverageCost(priorTrades, fromCur);
-  return proceedsAfn - avgCost * fromAmount;
+  const { qty, avgCost } = weightedAverageCost(priorTrades, fromCur);
+  const covered = Math.max(Math.min(qty, fromAmount), 0);
+  const uncovered = fromAmount - covered;
+  const costAfn = avgCost * covered + (marketRateAfn || 0) * uncovered;
+  return proceedsAfn - costAfn;
 }

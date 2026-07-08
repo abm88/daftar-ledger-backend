@@ -62,9 +62,30 @@ test('realized P&L is proceeds minus average cost of the disposed lot', () => {
   ];
   // Sell 2,000 USD for 144,000 AFN; cost basis 71/unit → profit 2,000 AFN.
   const pl = computeRealizedPl({
-    fromCur: 'USD', fromAmount: 2000, priorTrades, proceedsAfn: 144000
+    fromCur: 'USD', fromAmount: 2000, priorTrades, proceedsAfn: 144000, marketRateAfn: 71.9
   });
   assert.ok(Math.abs(pl - 2000) < 1e-9);
+});
+
+test('stock without trade-history basis is costed at market, realizing only the spread', () => {
+  // No prior FX buys — the USD came from initial setup / investments.
+  // Sell 2,000 USD @ 72 when market sell is 71.9 → spread of 0.1/unit = +200.
+  const pl = computeRealizedPl({
+    fromCur: 'USD', fromAmount: 2000, priorTrades: [], proceedsAfn: 144000, marketRateAfn: 71.9
+  });
+  assert.ok(Math.abs(pl - 200) < 1e-9);
+});
+
+test('partially covered disposal mixes WAC and market cost', () => {
+  // 1,000 USD held at 71 from trades; sell 2,000 — the extra 1,000 costs market 71.9.
+  const priorTrades = [
+    { fromCurrency: 'AFN', toCurrency: 'USD', fromAmount: 71000, toAmount: 1000, fromAfnValue: 71000 }
+  ];
+  const pl = computeRealizedPl({
+    fromCur: 'USD', fromAmount: 2000, priorTrades, proceedsAfn: 144000, marketRateAfn: 71.9
+  });
+  // proceeds 144,000 − (1,000×71 + 1,000×71.9) = 1,100
+  assert.ok(Math.abs(pl - 1100) < 1e-9);
 });
 
 test('buys from AFN realize nothing', () => {
