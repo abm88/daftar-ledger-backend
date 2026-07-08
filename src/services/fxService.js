@@ -53,7 +53,8 @@ export const fxService = {
         const priorTrades = await fxTradeRepository.listChronological(userId, client);
         const proceedsAfn = toCurrency === BASE_ASSET ? toAmount : toAfnValue;
         realizedPl = round6(computeRealizedPl({
-          fromCur: fromCurrency, fromAmount, priorTrades, proceedsAfn
+          fromCur: fromCurrency, fromAmount, priorTrades, proceedsAfn,
+          marketRateAfn: rates[fromCurrency]?.sell || 0
         }));
       }
 
