@@ -1267,7 +1267,10 @@ The home-screen aggregate in one call.
 P&L for the period, in AFN and translated to the reporting currency:
 
 - **fxRealized** — sum of realized FX P&L in the window
-- **hawalaCommission** — commission on *paid* hawalas, converted to AFN
+- **hawalaCommission** — commission on *paid* hawalas, converted to AFN.
+  Recognized on the date the hawala was **marked paid** (`paidAt`), so a
+  hawala issued last week and paid today counts toward today's P&L. Pending
+  hawalas contribute nothing until they are paid.
 - **unrealizedReval** — rate-move P&L on drawer holdings, `(sell − prevSell) ×
   balance` per non-AFN asset. A snapshot, not a flow — only included for
   `today` and `all`.
