@@ -3,7 +3,7 @@
  *
  * With --demo it also creates a demo saraf account mirroring the prototype's
  * sample data (counterparties, customers, hawalas, FX trades, investments):
- *   phone +93700000001 / password daftar123
+ *   email demo@daftar.af / password daftar123
  */
 import bcrypt from 'bcryptjs';
 import { pool, withTransaction } from '../src/db/pool.js';
@@ -40,8 +40,9 @@ const DAY = 86_400_000;
 const ago = (days, hours = 0) => new Date(Date.now() - days * DAY - hours * 3_600_000);
 
 async function seedDemo() {
+  const email = 'demo@daftar.af';
   const phone = '+93700000001';
-  const existing = await pool.query('SELECT id FROM users WHERE phone = $1', [phone]);
+  const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
   if (existing.rows.length > 0) {
     console.log('demo user already exists — skipping demo seed');
     return;
@@ -52,7 +53,7 @@ async function seedDemo() {
     const { rows: [user] } = await client.query(
       `INSERT INTO users (phone, email, password_hash, name, shop_name, city_code, registration_no)
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-      [phone, 'demo@daftar.af', passwordHash, 'Haji Rahmat', 'Sarai Shahzada', 'KBL', 'AFG-0421']
+      [phone, email, passwordHash, 'Haji Rahmat', 'Sarai Shahzada', 'KBL', 'AFG-0421']
     );
     const userId = user.id;
     await provisionUserDefaults(client, userId);
@@ -198,7 +199,7 @@ async function seedDemo() {
     }
   });
 
-  console.log('demo saraf created — phone +93700000001, password daftar123');
+  console.log('demo saraf created — email demo@daftar.af, password daftar123');
 }
 
 async function main() {

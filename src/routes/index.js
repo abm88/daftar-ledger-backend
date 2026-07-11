@@ -22,6 +22,7 @@ export const apiRouter = Router();
 // ---- Auth --------------------------------------------------------------
 apiRouter.post('/auth/register', validate(schemas.registerSchema), authController.register);
 apiRouter.post('/auth/login', validate(schemas.loginSchema), authController.login);
+apiRouter.post('/auth/logout', requireAuth, authController.logout);
 apiRouter.get('/auth/me', requireAuth, authController.me);
 apiRouter.put('/auth/me', requireAuth, validate(schemas.updateProfileSchema), authController.updateProfile);
 apiRouter.put('/auth/me/password', requireAuth, validate(schemas.changePasswordSchema), authController.changePassword);
