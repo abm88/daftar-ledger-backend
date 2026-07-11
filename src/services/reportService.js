@@ -8,6 +8,7 @@ import { assetRepository } from '../repositories/assetRepository.js';
 import { settingsRepository } from '../repositories/settingsRepository.js';
 import { counterpartyRepository } from '../repositories/counterpartyRepository.js';
 import { customerRepository } from '../repositories/customerRepository.js';
+import { setupService } from './setupService.js';
 import { counterpartyPositions } from '../domain/positions.js';
 import { assetToAfn, afnToReporting } from '../domain/rateMath.js';
 import {
@@ -261,13 +262,14 @@ export const reportService = {
    * pending hawalas, today's realized P&L, today's cash movement, and counts.
    */
   async dashboard(userId) {
-    const [hawalas, assets, settings, fxTrades, counterparties, customers] = await Promise.all([
+    const [hawalas, assets, settings, fxTrades, counterparties, customers, setupNeeded] = await Promise.all([
       hawalaRepository.listAllWithCounterparty(userId),
       assetRepository.listActiveForUser(userId),
       settingsRepository.getForUser(userId),
       fxTradeRepository.listChronological(userId),
       counterpartyRepository.listForUser(userId, {}),
-      customerRepository.listForUser(userId, {})
+      customerRepository.listForUser(userId, {}),
+      setupService.isSetupNeeded(userId)
     ]);
     const currencies = assets.map((a) => a.code);
 
@@ -292,6 +294,7 @@ export const reportService = {
     }
 
     return {
+      setupNeeded,
       globalPositions,
       pendingHawalas: pending,
       todayRealizedPlAfn: round6(todayRealizedPl),

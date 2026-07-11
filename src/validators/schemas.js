@@ -89,11 +89,21 @@ export const updateSettingsSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// Cash drawer
+// Cash drawer & first-run setup
 // ---------------------------------------------------------------------------
 
 export const cashCountSchema = z.object({ counts: countMap });
 export const initialSetupSchema = z.object({ amounts: positiveBalanceMap });
+
+/** The 3-step shop wizard: assets → default currencies → opening amounts. */
+export const setupSchema = z.object({
+  activeAssets: z.array(assetCode).min(1),
+  reportingCurrency: assetCode,
+  tradeCurrency: assetCode,
+  amounts: positiveBalanceMap.refine((m) => Object.keys(m).length > 0, {
+    message: 'Enter at least one opening amount'
+  })
+});
 
 // ---------------------------------------------------------------------------
 // Counterparties
