@@ -30,33 +30,37 @@ export const idParam = z.object({ id: uuid });
 // Auth
 // ---------------------------------------------------------------------------
 
+const email = z.string().trim().toLowerCase().email().max(200);
+// Prototype signup enforces "at least 6 characters" — keep the API in sync.
+const password = z.string().min(6, 'Password must be at least 6 characters').max(128);
+
 export const registerSchema = z.object({
-  phone,
-  email: z.string().trim().email().max(200).optional(),
-  password: z.string().min(8).max(128),
+  email,
+  password,
   name: shortText.min(1),
+  phone: phone.optional(),
   shopName: shortText.optional(),
   cityCode: cityCode.optional(),
   registrationNo: shortText.optional()
 });
 
 export const loginSchema = z.object({
-  phone: phone.optional(),
-  email: z.string().trim().email().optional(),
+  email,
   password: z.string().min(1)
-}).refine((v) => v.phone || v.email, { message: 'phone or email is required' });
+});
 
 export const updateProfileSchema = z.object({
   name: shortText.min(1).optional(),
   shopName: shortText.optional(),
   cityCode: cityCode.optional(),
   registrationNo: shortText.optional(),
-  email: z.string().trim().email().max(200).optional()
+  email: email.optional(),
+  phone: phone.optional()
 });
 
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1),
-  newPassword: z.string().min(8).max(128)
+  newPassword: password
 });
 
 // ---------------------------------------------------------------------------

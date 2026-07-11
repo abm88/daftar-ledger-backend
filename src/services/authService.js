@@ -1,9 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { config } from '../config/index.js';
 import { AppError } from '../utils/AppError.js';
 import { withTransaction } from '../db/pool.js';
 import { userRepository } from '../repositories/userRepository.js';
+import { sessionRepository } from '../repositories/sessionRepository.js';
 import { settingsRepository } from '../repositories/settingsRepository.js';
 import { assetRepository } from '../repositories/assetRepository.js';
 import { cashDrawerRepository } from '../repositories/cashDrawerRepository.js';
@@ -34,12 +36,23 @@ export async function provisionUserDefaults(client, userId) {
   }
 }
 
-function signToken(user) {
-  return jwt.sign(
-    { sub: user.id, phone: user.phone },
+/**
+ * Issues a JWT bound to a server-side session row. Sign-out revokes the row,
+ * which invalidates the token before its own expiry.
+ */
+async function startSession(user, client) {
+  const sessionId = randomUUID();
+  const token = jwt.sign(
+    { sub: user.id, sid: sessionId, email: user.email },
     config.auth.jwtSecret,
     { expiresIn: config.auth.jwtExpiresIn }
   );
+  const { exp } = jwt.decode(token);
+  await sessionRepository.create(
+    { id: sessionId, userId: user.id, expiresAt: new Date(exp * 1000) },
+    client
+  );
+  return token;
 }
 
 function sanitize(user) {
@@ -49,36 +62,53 @@ function sanitize(user) {
 }
 
 export const authService = {
-  async register({ phone, email, password, name, shopName, cityCode, registrationNo }) {
-    const existing = await userRepository.findByPhone(phone);
-    if (existing) throw AppError.conflict('An account with this phone already exists');
-    if (email) {
-      const byEmail = await userRepository.findByEmail(email);
-      if (byEmail) throw AppError.conflict('An account with this email already exists');
+  async register({ email, password, name, phone, shopName, cityCode, registrationNo }) {
+    const byEmail = await userRepository.findByEmail(email);
+    if (byEmail) throw AppError.conflict('An account with this email already exists');
+    if (phone) {
+      const byPhone = await userRepository.findByPhone(phone);
+      if (byPhone) throw AppError.conflict('An account with this phone already exists');
     }
 
     const passwordHash = await bcrypt.hash(password, config.auth.bcryptRounds);
-    const user = await withTransaction(async (client) => {
+    const { user, token } = await withTransaction(async (client) => {
       const created = await userRepository.create(client, {
-        phone, email, passwordHash, name, shopName, cityCode, registrationNo
+        email, phone, passwordHash, name, shopName, cityCode, registrationNo
       });
       await provisionUserDefaults(client, created.id);
-      return created;
+      return { user: created, token: await startSession(created, client) };
     });
 
-    return { user: sanitize(user), token: signToken(user) };
+    return { user: sanitize(user), token };
   },
 
-  async login({ phone, email, password }) {
-    const user = phone
-      ? await userRepository.findByPhone(phone)
-      : await userRepository.findByEmail(email);
-    if (!user) throw AppError.unauthorized('Invalid credentials');
+  async login({ email, password }) {
+    const user = await userRepository.findByEmail(email);
+    // Deliberately vague — never reveal whether the email exists.
+    if (!user) throw AppError.unauthorized('Email or password is incorrect');
 
     const ok = await bcrypt.compare(password, user.passwordHash);
-    if (!ok) throw AppError.unauthorized('Invalid credentials');
+    if (!ok) throw AppError.unauthorized('Email or password is incorrect');
 
-    return { user: sanitize(user), token: signToken(user) };
+    return { user: sanitize(user), token: await startSession(user) };
+  },
+
+  /** Revokes the session behind the presented token. Idempotent. */
+  async logout(sessionId) {
+    await sessionRepository.revoke(sessionId);
+  },
+
+  /** Verifies the JWT and that its session is still live (not signed out). */
+  async authenticate(token) {
+    let payload;
+    try {
+      payload = jwt.verify(token, config.auth.jwtSecret);
+    } catch {
+      throw AppError.unauthorized('Invalid or expired token');
+    }
+    const session = payload.sid && await sessionRepository.findActive(payload.sid);
+    if (!session) throw AppError.unauthorized('Session has ended — please sign in again');
+    return { userId: payload.sub, sessionId: payload.sid };
   },
 
   async getProfile(userId) {
@@ -99,20 +129,14 @@ export const authService = {
     return user;
   },
 
-  async changePassword(userId, { currentPassword, newPassword }) {
+  async changePassword(userId, sessionId, { currentPassword, newPassword }) {
     const user = await userRepository.findByIdWithPassword(userId);
     if (!user) throw AppError.notFound('User not found');
     const ok = await bcrypt.compare(currentPassword, user.passwordHash);
     if (!ok) throw AppError.unauthorized('Current password is incorrect');
     const passwordHash = await bcrypt.hash(newPassword, config.auth.bcryptRounds);
     await userRepository.updatePassword(userId, passwordHash);
-  },
-
-  verifyToken(token) {
-    try {
-      return jwt.verify(token, config.auth.jwtSecret);
-    } catch {
-      throw AppError.unauthorized('Invalid or expired token');
-    }
+    // Sign out every other device; the session that changed the password stays.
+    await sessionRepository.revokeAllForUserExcept(userId, sessionId);
   }
 };
