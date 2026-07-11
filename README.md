@@ -68,7 +68,7 @@ npm run seed:demo             # optional: demo saraf with sample data
 npm run dev                   # or: npm start
 ```
 
-Demo login after `seed:demo`: phone `+93700000001`, password `daftar123`.
+Demo login after `seed:demo`: email `demo@daftar.af`, password `daftar123`.
 
 ## Testing
 
@@ -86,11 +86,15 @@ root). All request and response bodies are JSON
 
 ### Authentication
 
-Register or log in to receive a JWT, then send it on every other call:
+Register or log in with **email + password** to receive a JWT, then send it
+on every other call:
 
 ```
 Authorization: Bearer <token>
 ```
+
+Each token is bound to a server-side session; `POST /auth/logout` revokes
+that session, so a signed-out token is rejected even before its JWT expiry.
 
 Only `POST /auth/register`, `POST /auth/login`, `GET /cities`, and
 `GET /health` are public. Every business resource is scoped to the
@@ -112,7 +116,7 @@ All errors share one shape. `details` appears on validation failures.
 | Status | Meaning |
 |---|---|
 | `400` | Malformed request / failed validation |
-| `401` | Missing or invalid token, bad credentials |
+| `401` | Missing, invalid, or signed-out token; bad credentials |
 | `404` | Resource not found (or belongs to another saraf) |
 | `409` | Conflict (duplicate phone/email, hawala already paid) |
 | `422` | Business rule violation (insufficient balance, inactive asset, …) |
@@ -132,7 +136,7 @@ List endpoints that page accept `?limit=` (default 50, max 200) and
 | Group | Endpoints |
 |---|---|
 | [Health](#health) | `GET /health` |
-| [Auth](#auth) | `POST /auth/register` · `POST /auth/login` · `GET /auth/me` · `PUT /auth/me` · `PUT /auth/me/password` |
+| [Auth](#auth) | `POST /auth/register` · `POST /auth/login` · `POST /auth/logout` · `GET /auth/me` · `PUT /auth/me` · `PUT /auth/me/password` |
 | [Cities](#cities) | `GET /cities` |
 | [Assets](#assets) | `GET /assets` · `PATCH /assets/:code/activation` |
 | [Rates](#rates) | `GET /rates` · `PUT /rates` · `GET /rates/history` |
@@ -168,24 +172,27 @@ Liveness probe including database connectivity. Public, not under `/api/v1`.
 
 Creates a saraf account and provisions everything a fresh shop needs:
 settings, per-asset activation flags, a zeroed cash drawer, and starting
-rates. Public.
+rates. Signing up also starts a session — the returned token is ready to
+use immediately. Public.
 
-**Payload** — `phone` (unique) and `password` (min 8 chars) and `name` are
-required; the rest optional:
+**Payload** — `email` (unique, case-insensitive), `password` (min 6 chars),
+and `name` are required, matching the app's signup screen; the rest is
+optional profile data that can also be added later via `PUT /auth/me`:
 
 ```json
 {
-  "phone": "+93700000002",
   "email": "rahmat@example.af",
   "password": "secret123",
   "name": "Haji Rahmat",
+  "phone": "+93700000002",
   "shopName": "Sarai Shahzada",
   "cityCode": "KBL",
   "registrationNo": "AFG-0421"
 }
 ```
 
-**Response `201`** (`409` if the phone or email is already registered):
+**Response `201`** (`409` if the email — or phone, when provided — is
+already registered):
 
 ```json
 {
@@ -206,16 +213,29 @@ required; the rest optional:
 
 ### `POST /auth/login`
 
-Log in with `phone` **or** `email`, plus `password`. Public.
+Log in with `email` + `password`. Public.
 
 **Payload:**
 
 ```json
-{ "phone": "+93700000002", "password": "secret123" }
+{ "email": "rahmat@example.af", "password": "secret123" }
 ```
 
-**Response `200`** — same `{ user, token }` shape as register. `401` on bad
-credentials.
+**Response `200`** — same `{ user, token }` shape as register. `401` with a
+deliberately vague `"Email or password is incorrect"` on bad credentials
+(never reveals whether the email exists).
+
+### `POST /auth/logout`
+
+Signs out the presented token by revoking its server-side session. The
+token stops working immediately, even though the JWT itself has not
+expired. Idempotent — signing out twice is fine.
+
+**Response `200`:**
+
+```json
+{ "message": "Signed out" }
+```
 
 ### `GET /auth/me`
 
@@ -230,12 +250,15 @@ Updates profile fields. All optional; only provided fields change.
 **Payload:**
 
 ```json
-{ "name": "Haji Rahmat", "shopName": "Sarai Shahzada — Kabul", "cityCode": "KBL", "registrationNo": "AFG-0421", "email": "new@example.af" }
+{ "name": "Haji Rahmat", "shopName": "Sarai Shahzada — Kabul", "cityCode": "KBL", "registrationNo": "AFG-0421", "email": "new@example.af", "phone": "+93700000002" }
 ```
 
 **Response `200`:** `{ "user": { ...updated user... } }`
 
 ### `PUT /auth/me/password`
+
+Changes the password (min 6 chars) and signs out every other active
+session; only the session that made the change stays valid.
 
 **Payload:**
 

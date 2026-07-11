@@ -12,6 +12,11 @@ export const authController = {
     res.json(result);
   }),
 
+  logout: asyncHandler(async (req, res) => {
+    await authService.logout(req.sessionId);
+    res.json({ message: 'Signed out' });
+  }),
+
   me: asyncHandler(async (req, res) => {
     const user = await authService.getProfile(req.userId);
     res.json({ user });
@@ -23,7 +28,7 @@ export const authController = {
   }),
 
   changePassword: asyncHandler(async (req, res) => {
-    await authService.changePassword(req.userId, req.body);
+    await authService.changePassword(req.userId, req.sessionId, req.body);
     res.json({ message: 'Password updated' });
   })
 };

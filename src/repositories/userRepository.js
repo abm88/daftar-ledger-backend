@@ -10,7 +10,7 @@ export const userRepository = {
       `INSERT INTO users (email, phone, password_hash, name, shop_name, city_code, registration_no)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING ${USER_COLUMNS}`,
-      [email || null, phone, passwordHash, name, shopName || '', cityCode || null, registrationNo || '']
+      [email, phone || null, passwordHash, name, shopName || '', cityCode || null, registrationNo || '']
     );
     return toCamel(rows[0]);
   },
@@ -47,7 +47,7 @@ export const userRepository = {
     return toCamel(rows[0]);
   },
 
-  async updateProfile(id, { name, shopName, cityCode, registrationNo, email }, client) {
+  async updateProfile(id, { name, shopName, cityCode, registrationNo, email, phone }, client) {
     const { rows } = await db(client).query(
       `UPDATE users SET
          name = COALESCE($2, name),
@@ -55,10 +55,11 @@ export const userRepository = {
          city_code = COALESCE($4, city_code),
          registration_no = COALESCE($5, registration_no),
          email = COALESCE($6, email),
+         phone = COALESCE($7, phone),
          updated_at = now()
        WHERE id = $1
        RETURNING ${USER_COLUMNS}`,
-      [id, name ?? null, shopName ?? null, cityCode ?? null, registrationNo ?? null, email ?? null]
+      [id, name ?? null, shopName ?? null, cityCode ?? null, registrationNo ?? null, email ?? null, phone ?? null]
     );
     return toCamel(rows[0]);
   },
