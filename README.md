@@ -3,6 +3,9 @@
 Node.js + PostgreSQL backend for **Daftar**, a ledger app for Afghan sarafs
 (money exchangers). It powers everything the app does:
 
+- **First-run shop setup** — the 3-step "Welcome to Daftar" wizard (choose
+  assets → default currencies → opening amounts) committed atomically in one
+  call, with first-run detection for the home welcome card.
 - **Multi-asset cash drawer** — fiat currencies (USD, AFN, PKR, EUR, GBP, SAR,
   AED) and metals (gold/silver in grams, tola display), cash counts, initial
   setup, today's cash movement.
@@ -137,6 +140,7 @@ List endpoints that page accept `?limit=` (default 50, max 200) and
 |---|---|
 | [Health](#health) | `GET /health` |
 | [Auth](#auth) | `POST /auth/register` · `POST /auth/login` · `POST /auth/logout` · `GET /auth/me` · `PUT /auth/me` · `PUT /auth/me/password` |
+| [Setup](#setup) | `GET /setup/status` · `POST /setup` |
 | [Cities](#cities) | `GET /cities` |
 | [Assets](#assets) | `GET /assets` · `PATCH /assets/:code/activation` |
 | [Rates](#rates) | `GET /rates` · `PUT /rates` · `GET /rates/history` |
@@ -271,6 +275,93 @@ session; only the session that made the change stays valid.
 ```json
 { "message": "Password updated" }
 ```
+
+---
+
+## Setup
+
+The app's first-run **"Welcome to Daftar"** wizard, shown right after a new
+saraf registers:
+
+1. **Assets** — pick the currencies and metals the shop deals in. AFN is the
+   base currency and is always enabled.
+2. **Currency** — pick the reporting currency (totals, P&L, drawer value) and
+   the trade currency (pre-selected in FX/hawala/customer forms) from the
+   enabled currencies.
+3. **Amounts** — enter what's in the drawer right now. Each amount sets the
+   drawer balance **and** records an `opening` investment (owner equity).
+
+The same wizard is reachable later from Shop → Initial Setup to reset
+opening balances.
+
+### `GET /setup/status`
+
+Whether the first-run wizard should be shown. `setupNeeded` is `true` until
+the drawer holds a positive balance or any investment exists — the same flag
+the dashboard returns for the home-screen welcome card.
+
+**Response `200`:**
+
+```json
+{ "setupNeeded": true }
+```
+
+### `POST /setup`
+
+Commits the whole wizard in one transaction: activates exactly the listed
+assets (everything else is turned off; AFN is force-enabled even if
+omitted), saves the default currencies, sets drawer balances for the entered
+amounts, and records each amount as an `opening` investment. Amounts left
+out keep their current drawer balances, so a re-run replaces only what was
+entered.
+
+**Payload** — `reportingCurrency` and `tradeCurrency` must be currency
+(not metal) assets from `activeAssets`; `amounts` needs at least one entry,
+keyed by enabled assets only (metals in grams):
+
+```json
+{
+  "activeAssets": ["USD", "AFN", "PKR", "GOLD"],
+  "reportingCurrency": "AFN",
+  "tradeCurrency": "USD",
+  "amounts": { "USD": 12000, "AFN": 500000, "GOLD": 116.638 }
+}
+```
+
+**Response `201`** (`422` for unknown/disabled assets, a metal or disabled
+reporting/trade currency; `400` when `amounts` is empty):
+
+```json
+{
+  "setupNeeded": false,
+  "settings": { "reportingCurrency": "AFN", "tradeCurrency": "USD" },
+  "assets": [
+    { "code": "USD", "active": true },
+    { "code": "AFN", "active": true },
+    { "code": "PKR", "active": true },
+    { "code": "EUR", "active": false },
+    { "code": "GBP", "active": false },
+    { "code": "SAR", "active": false },
+    { "code": "AED", "active": false },
+    { "code": "GOLD", "active": true },
+    { "code": "SILVER", "active": false }
+  ],
+  "drawer": {
+    "items": [
+      { "assetCode": "USD", "type": "currency", "name": "US Dollar", "symbol": "$", "decimals": 2, "balance": 12000, "afnValue": 861600, "reportingValue": 861600, "revaluationAfn": 3600 },
+      { "assetCode": "AFN", "type": "currency", "name": "Afghani", "symbol": "؋", "decimals": 0, "balance": 500000, "afnValue": 500000, "reportingValue": 500000, "revaluationAfn": 0 },
+      { "assetCode": "PKR", "type": "currency", "name": "Pakistani Rupee", "symbol": "₨", "decimals": 0, "balance": 0, "afnValue": 0, "reportingValue": 0, "revaluationAfn": 0 },
+      { "assetCode": "GOLD", "type": "metal", "name": "Gold", "symbol": "g", "decimals": 2, "balance": 116.638, "tola": 10, "afnValue": 670668.5, "reportingValue": 670668.5, "revaluationAfn": 3499.14 }
+    ],
+    "totals": { "afn": 2032268.5, "reporting": 2032268.5, "reportingCurrency": "AFN", "revaluationAfn": 7099.14 },
+    "lastCountAt": "2026-07-11T23:12:41.804Z"
+  }
+}
+```
+
+Note for the wizard UI: only AFN is hard-locked here. The standalone
+`PATCH /assets/:code/activation` endpoint still refuses to deactivate the
+core USD/AFN/PKR trio, mirroring the app's Assets settings screen.
 
 ---
 
@@ -467,8 +558,10 @@ Assets left out stay untouched, so partial counts are fine. Updates
 
 ### `POST /cash-drawer/initial-setup`
 
-First-run flow: sets opening drawer balances **and** records each amount as an
-`opening` investment entry.
+Sets opening drawer balances **and** records each amount as an `opening`
+investment entry — the amounts-only step of the first-run flow. For the full
+3-step wizard (assets + default currencies + amounts in one transaction) use
+[`POST /setup`](#post-setup).
 
 **Payload** (only positive amounts):
 
@@ -1233,12 +1326,15 @@ Either or both fields; each must be an **active** asset (`422` otherwise).
 
 ### `GET /reports/dashboard`
 
-The home-screen aggregate in one call.
+The home-screen aggregate in one call. `setupNeeded` mirrors
+[`GET /setup/status`](#get-setupstatus) and drives the "Set up your daftar"
+welcome card.
 
 **Response `200`:**
 
 ```json
 {
+  "setupNeeded": false,
   "globalPositions": { "USD": 0, "AFN": 0, "PKR": 0, "GOLD": 0 },
   "pendingHawalas": [
     {
