@@ -70,19 +70,24 @@ export const reportService = {
       });
     }
 
-    // Realized: hawala commissions on paid, non-settle hawalas.
+    // Realized: hawala commissions on paid, non-settle hawalas. Revenue is
+    // recognized when the hawala is marked paid, not when it was issued —
+    // otherwise a hawala issued last week and paid today never shows up in
+    // today's (or this week's) P&L.
     let hawalaCommission = 0;
     const hawalaBreakdown = [];
     for (const h of hawalas) {
       if (h.type === HAWALA_TYPES.SETTLE || h.isOpening) continue;
-      if (h.status !== HAWALA_STATUS.PAID || !inWindow(h.createdAt, bounds)) continue;
+      if (h.status !== HAWALA_STATUS.PAID) continue;
+      const realizedAt = h.paidAt || h.createdAt;
+      if (!inWindow(realizedAt, bounds)) continue;
       const commissionAfn = assetToAfn(rates, h.currency, h.commissionAmount);
       if (commissionAfn === 0) continue;
       hawalaCommission += commissionAfn;
       hawalaBreakdown.push({
         kind: 'hawala',
         id: h.id,
-        at: h.createdAt,
+        at: realizedAt,
         label: `${h.type === 'send' ? 'Sent' : 'Received'} hawala · ${h.fromCity}→${h.toCity} · ` +
                (h.commissionMode === 'fixed'
                  ? `${h.commissionAmount} ${h.currency} fee on ${h.amount} ${h.currency}`
