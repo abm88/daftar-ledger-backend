@@ -16,6 +16,7 @@ import { investmentController } from '../controllers/investmentController.js';
 import { settingsController } from '../controllers/settingsController.js';
 import { reportController } from '../controllers/reportController.js';
 import { referenceController } from '../controllers/referenceController.js';
+import { setupController } from '../controllers/setupController.js';
 
 export const apiRouter = Router();
 
@@ -32,6 +33,10 @@ apiRouter.get('/cities', referenceController.cities);
 
 // Everything below is per-saraf data.
 apiRouter.use(requireAuth);
+
+// ---- First-run shop setup (3-step wizard) -----------------------------------
+apiRouter.get('/setup/status', setupController.status);
+apiRouter.post('/setup', validate(schemas.setupSchema), setupController.complete);
 
 // ---- Assets & rates -------------------------------------------------------
 apiRouter.get('/assets', assetController.list);
