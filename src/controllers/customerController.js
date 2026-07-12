@@ -4,11 +4,12 @@ import { statementService } from '../services/statementService.js';
 
 export const customerController = {
   list: asyncHandler(async (req, res) => {
-    const customers = await customerService.list(req.userId, {
+    const result = await customerService.list(req.userId, {
       search: req.query.search,
-      cityCode: req.query.city
+      cityCode: req.query.city,
+      status: req.query.status
     });
-    res.json({ customers });
+    res.json(result);
   }),
 
   get: asyncHandler(async (req, res) => {

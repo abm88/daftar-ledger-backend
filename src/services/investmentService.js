@@ -11,14 +11,20 @@ import { round6 } from '../utils/money.js';
 
 export const investmentService = {
   /**
-   * All equity entries plus per-asset totals (invested / withdrawn / net)
-   * and the grand total in the reporting currency.
+   * All equity entries plus per-asset totals (invested / withdrawn / net),
+   * the grand total in the reporting currency, and the Investments screen's
+   * headline: current equity (drawer holdings at today's rates) vs. net
+   * invested capital, with the return in absolute and percent terms.
+   * Equity is cash holdings only — receivables and payables are excluded,
+   * matching the app's simplification.
    */
   async list(userId) {
-    const [entries, rates, settings] = await Promise.all([
+    const [entries, rates, settings, drawer, assets] = await Promise.all([
       investmentRepository.listForUser(userId),
       rateRepository.mapForUser(userId),
-      settingsRepository.getForUser(userId)
+      settingsRepository.getForUser(userId),
+      cashDrawerRepository.mapForUser(userId),
+      assetRepository.listActiveForUser(userId)
     ]);
     const reporting = settings.reportingCurrency;
 
@@ -47,10 +53,25 @@ export const investmentService = {
       bucket.net = round6(bucket.net);
     }
 
+    let currentEquityReporting = 0;
+    for (const asset of assets) {
+      const balance = drawer[asset.code] || 0;
+      if (balance === 0) continue;
+      currentEquityReporting += assetToReporting(rates, asset.code, balance, reporting);
+    }
+    const netReturnReporting = currentEquityReporting - netReporting;
+    const netReturnPct = netReporting > 0 ? (netReturnReporting / netReporting) * 100 : 0;
+
     return {
       entries,
       perAsset,
-      totals: { netReporting: round6(netReporting), reportingCurrency: reporting }
+      totals: { netReporting: round6(netReporting), reportingCurrency: reporting },
+      equity: {
+        currentReporting: round6(currentEquityReporting),
+        netReturnReporting: round6(netReturnReporting),
+        netReturnPct: round6(netReturnPct),
+        reportingCurrency: reporting
+      }
     };
   },
 
