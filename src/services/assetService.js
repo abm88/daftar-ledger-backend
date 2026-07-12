@@ -16,8 +16,10 @@ export const assetService = {
     const assets = await assetRepository.listForUser(userId);
     const asset = assets.find((a) => a.code === assetCode);
     if (!asset) throw AppError.notFound(`Unknown asset: ${assetCode}`);
-    if (asset.isDefault && !active) {
-      throw AppError.unprocessable(`${assetCode} is a core asset and cannot be deactivated`);
+    // Only the base asset (AFN) is locked on — every rate is quoted against
+    // it. Default currencies like USD/PKR are suggestions, not requirements.
+    if (asset.isBase && !active) {
+      throw AppError.unprocessable(`${assetCode} is the base currency and cannot be deactivated`);
     }
     await assetRepository.setActivation(userId, assetCode, active);
     return { ...asset, active };

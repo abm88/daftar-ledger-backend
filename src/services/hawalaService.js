@@ -7,10 +7,9 @@ import { customerTransactionRepository } from '../repositories/customerTransacti
 import { settingsRepository } from '../repositories/settingsRepository.js';
 import { referenceRepository } from '../repositories/referenceRepository.js';
 import { commissionAmount } from '../domain/commission.js';
-import { customerBalances } from '../domain/positions.js';
 import { formatHawalaCode } from '../domain/codes.js';
 import {
-  BALANCE_TOLERANCE, COMMISSION_MODES, SENDER_MODES, HAWALA_STATUS
+  COMMISSION_MODES, SENDER_MODES, HAWALA_STATUS
 } from '../config/constants.js';
 import { round6 } from '../utils/money.js';
 
@@ -42,9 +41,9 @@ export const hawalaService = {
    * Issues a hawala (status: pending).
    *
    * senderMode 'cash'    — sender pays at the counter; senderName is free text.
-   * senderMode 'account' — funded from a customer account: validates the
-   * customer holds amount + commission in the hawala currency (0.5 tolerance)
-   * and writes a linked 'withdrawal' transaction for the debit total.
+   * senderMode 'account' — funded from a customer account: writes a linked
+   * 'withdrawal' transaction for amount + commission. The account may go
+   * negative — the debit simply adds to the customer's outstanding balance.
    *
    * Commission is percent (of amount) or a fixed fee in the hawala currency.
    * The pickup code is claimed atomically from the per-user sequence.
@@ -76,15 +75,6 @@ export const hawalaService = {
         customer = await customerRepository.findById(userId, senderCustomerId, client);
         if (!customer) throw AppError.notFound('Sender customer account not found');
         resolvedSenderName = customer.name;
-
-        const txs = await customerTransactionRepository.listByCustomer(customer.id, client);
-        const balances = customerBalances(txs, [currency]);
-        const debitTotal = amount + commission;
-        if ((balances[currency] || 0) < debitTotal - BALANCE_TOLERANCE) {
-          throw AppError.unprocessable(
-            `Insufficient ${currency} balance: has ${round6(balances[currency] || 0)}, needs ${round6(debitTotal)}`
-          );
-        }
       } else if (!resolvedSenderName) {
         throw AppError.unprocessable('Sender name is required for cash hawalas');
       }

@@ -390,8 +390,8 @@ Hawala routing cities. Public.
 
 Currencies are whole-unit fiat; metals are tracked in **grams** and carry
 `tolaGrams` (11.6638) for tola display. AFN is the base asset every rate is
-quoted against. USD, AFN, and PKR are core (`isDefault: true`) and cannot be
-deactivated.
+quoted against and is the only asset that cannot be deactivated. USD and PKR
+are defaults (`isDefault: true`) — pre-suggested, but freely deactivatable.
 
 ### `GET /assets`
 
@@ -427,7 +427,7 @@ Activates or deactivates an asset for this saraf.
 { "active": true }
 ```
 
-**Response `200`** (`422` when deactivating a core asset, `404` unknown code):
+**Response `200`** (`422` when deactivating the base asset AFN, `404` unknown code):
 
 ```json
 {
@@ -852,9 +852,10 @@ Rules:
 
 - `senderMode: "cash"` requires `senderName`; `"account"` requires
   `senderCustomerId` (the sender name resolves to the customer's name).
-- Account mode validates the customer holds `amount + commission` in the
-  hawala currency (0.5 tolerance) — `422` otherwise — and writes a linked
-  `withdrawal` on their account for the debit total, tagged with `hawalaId`.
+- Account mode writes a linked `withdrawal` on the customer's account for
+  `amount + commission`, tagged with `hawalaId`. The account may go negative —
+  the debit adds to the customer's outstanding balance (what they owe the
+  saraf); no minimum balance is required.
 - `commissionMode: "percent"` uses `commissionPct` (default 1.0);
   `"fixed"` requires `commissionFixed`, a fee in the hawala currency.
 - `type` is `send` or `recv`. Cities must exist in `/cities`.
