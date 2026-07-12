@@ -15,18 +15,21 @@ Node.js + PostgreSQL backend for **Daftar**, a ledger app for Afghan sarafs
   one-tap settlement.
 - **Customer accounts** — deposits, withdrawals, charges, credit advances,
   cross-currency intake with conversion metadata, running balances,
-  statements and receipts.
+  statements and receipts, status filters (deposits / advances / settled)
+  and the custodial-holdings summary behind the Accounts screen.
 - **FX trading** — canonical rate quoting, drawer-stock validation,
   weighted-average cost basis, realized and unrealized P&L, open positions.
 - **Owner investments** — opening capital, additions, withdrawals tied to the
-  drawer.
+  drawer, plus the current-equity / net-return headline.
 - **Rates** — per-asset buy/sell vs AFN with history and derived cross rates.
 - **Reports** — P&L (FX + hawala commission + revaluation) by period, unified
-  activity feed, dashboard aggregate, exportable ledger statements.
+  activity feed with per-kind counts and a today in/out/net summary,
+  dashboard aggregate, exportable ledger statements.
 
 Jump to: [Architecture](#architecture) · [Quick start](#quick-start-docker) ·
-[**API documentation**](#api-documentation) · [Deployment](#deploying-to-digitalocean) ·
-[Domain notes](#domain-notes)
+[**API documentation**](#api-documentation) ·
+[**Client integration guide**](#client-integration-guide) ·
+[Deployment](#deploying-to-digitalocean) · [Domain notes](#domain-notes)
 
 ## Architecture
 
@@ -906,7 +909,21 @@ Account holders at the shop. **Balances** are per-currency; positive = the
 saraf owes the customer. `opening`/`deposit` credit (+); `withdrawal` /
 `charge` (paid on their behalf) / `credit` (advance given) debit (−).
 
-### `GET /customers?search=&city=`
+### `GET /customers?search=&city=&status=`
+
+Query parameters (all optional):
+
+| Param | Meaning |
+|---|---|
+| `search` | Matches name, short name, **or phone** (the Accounts screen's "Search account or phone…") |
+| `city` | City code, e.g. `KBL` |
+| `status` | `deposits` (holds funds with you), `advances` (owes you), or `settled` — the Accounts screen's filter chips |
+
+The response also carries the Accounts screen's aggregates. `summary` and
+`total` always cover **all** accounts — filters only narrow the `customers`
+list — so the custodial-holdings card and "Showing X of Y" header can be
+rendered from one call. A customer holding USD but owing AFN counts in both
+`withDeposits` and `withAdvances`; balances within ±0.5 count as settled.
 
 **Response `200`:**
 
@@ -929,7 +946,16 @@ saraf owes the customer. `opening`/`deposit` credit (+); `withdrawal` /
       "balances": { "USD": 8500, "AFN": 0, "PKR": 0, "GOLD": 0 },
       "transactionCount": 1
     }
-  ]
+  ],
+  "summary": {
+    "holdings": {
+      "USD": { "deposits": 20900, "advances": 0, "net": 20900 },
+      "AFN": { "deposits": 0, "advances": 1330000, "net": -1330000 },
+      "PKR": { "deposits": 0, "advances": 180000, "net": -180000 }
+    },
+    "statusCounts": { "withDeposits": 3, "withAdvances": 2, "settled": 0 }
+  },
+  "total": 3
 }
 ```
 
@@ -1266,8 +1292,12 @@ Owner equity movements. Each entry also moves the cash drawer: `opening` and
 
 ### `GET /investments`
 
-All entries (newest first) plus per-asset totals and the net total in the
-reporting currency.
+All entries (newest first) plus per-asset totals, the net total in the
+reporting currency, and the Investments screen's headline `equity` block:
+current drawer holdings valued at today's rates vs. net invested capital,
+with the return in absolute and percent terms. Equity counts **cash holdings
+only** (receivables and payables are excluded, matching the app). When net
+invested capital is zero or negative, `netReturnPct` is `0`.
 
 **Response `200`:**
 
@@ -1281,7 +1311,13 @@ reporting currency.
     "USD": { "invested": 15450, "withdrawn": 0, "net": 15450, "count": 2 },
     "AFN": { "invested": 1850000, "withdrawn": 0, "net": 1850000, "count": 1 }
   },
-  "totals": { "netReporting": 3744455.4, "reportingCurrency": "AFN" }
+  "totals": { "netReporting": 3744455.4, "reportingCurrency": "AFN" },
+  "equity": {
+    "currentReporting": 4120555.4,
+    "netReturnReporting": 376100,
+    "netReturnPct": 10.04,
+    "reportingCurrency": "AFN"
+  }
 }
 ```
 
@@ -1353,10 +1389,22 @@ welcome card.
     }
   ],
   "todayRealizedPlAfn": 200,
-  "counts": { "counterparties": 1, "customers": 1, "pendingHawalas": 1 },
+  "counts": {
+    "counterparties": 1,
+    "customers": 1,
+    "pendingHawalas": 1,
+    "hawalas": 4,
+    "customerTransactions": 6,
+    "fxTrades": 2,
+    "entries": 10
+  },
   "defaults": { "reportingCurrency": "AFN", "tradeCurrency": "USD" }
 }
 ```
+
+`counts.hawalas` / `counts.customerTransactions` are raw ledger-entry tallies
+(opening and settlement sentinels included) and `counts.entries` is their sum
+— they feed the Daftar tab's *Contacts / Entries* mini-stats.
 
 ### `GET /reports/pnl?period=today|week|month|all`
 
@@ -1441,12 +1489,26 @@ and FX trades in one reverse-chronological stream.
       "ref": { "type": "fxTrade", "id": "0c320684-42ef-48df-b268-3744abbcd5b5" }
     }
   ],
+  "counts": { "all": 9, "hawala": 4, "settle": 1, "custtx": 3, "fx": 1 },
+  "todaySummary": { "inflowAfn": 7180, "outflowAfn": 500, "netAfn": 6680 },
   "pagination": { "total": 9, "limit": 2, "offset": 0, "hasMore": true }
 }
 ```
 
 Hawala items additionally carry `status` and `code`; customer-transaction
 items carry `drcr` (`"CR"`/`"DR"`) and `ref.customerId`.
+
+Two blocks power the Ledger tab's chrome and ignore the active filters:
+
+- **`counts`** — entries per kind across the whole feed, for the filter-chip
+  badges (All / Hawalas / Customer / FX / Settle).
+- **`todaySummary`** — today's money in / out / net in AFN-equivalent at
+  current sell rates. Only customer transactions (CR → in, DR → out) and
+  settlements (positive delta → in, negative → out) feed it: hawala and FX
+  rows are displayed unsigned in the ledger — a hawala moves the counterparty
+  position, and an FX trade swaps one drawer asset for another — so neither
+  counts as money in or out here. (Physical cash movement per currency lives
+  at [`GET /cash-drawer/today-movement`](#get-cash-drawertoday-movement).)
 
 ### `GET /reports/ledger-statement?period=&kind=&from=&to=`
 
@@ -1470,6 +1532,191 @@ override it).
   "generatedAt": "2026-07-08T14:25:49.856Z"
 }
 ```
+
+---
+
+# Client integration guide
+
+How to wire the Daftar prototype (single-file HTML app, `daftarapp_18.html`)
+to this backend. The prototype is a complete, self-contained UI that keeps
+all state in `localStorage`; going live means replacing its storage and auth
+layer with API calls — the rendering, navigation, and form logic stay as
+they are.
+
+## The integration model
+
+The prototype was deliberately structured so a small number of functions own
+all persistence:
+
+| Prototype function | What it does today | What it becomes |
+|---|---|---|
+| `signupUser(email, password, name)` | writes to `localStorage` auth store | `POST /auth/register` |
+| `loginUser(email, password)` | verifies against `localStorage` | `POST /auth/login` |
+| `logoutUser()` | clears the local session | `POST /auth/logout` + drop the token |
+| `getCurrentUser()` | reads session from `localStorage` | restore saved JWT, then `GET /auth/me` |
+| `loadUserData(userId)` / `applyUserDataToState(...)` | loads the whole shop state blob | per-screen `GET` calls (see mapping below) |
+| `saveUserData(userId)` / `scheduleSave()` | persists the whole state blob after each render | **delete** — every mutation already has a `POST`/`PUT`/`PATCH`/`DELETE` endpoint |
+
+Everything else in the file — screens, overlays, `render()`, `handleAction()`
+— keeps working; the write-actions inside `handleAction()` swap their direct
+`state` mutations for an API call followed by a refetch of whatever that
+screen reads.
+
+## Minimal API client
+
+```js
+var API_BASE = 'https://your-api.example.com/api/v1';
+var TOKEN_KEY = 'daftar_jwt';
+
+async function api(method, path, body) {
+  var res = await fetch(API_BASE + path, {
+    method: method,
+    headers: Object.assign(
+      { 'Content-Type': 'application/json' },
+      localStorage.getItem(TOKEN_KEY)
+        ? { Authorization: 'Bearer ' + localStorage.getItem(TOKEN_KEY) } : {}
+    ),
+    body: body ? JSON.stringify(body) : undefined
+  });
+  if (res.status === 204) return null;
+  var data = await res.json();
+  if (!res.ok) {
+    // { error: { message, details? } } — show error.message in the form,
+    // use details[].path/.message to highlight fields (the "shake" states).
+    var err = new Error(data.error ? data.error.message : res.statusText);
+    err.status = res.status;
+    err.details = data.error && data.error.details;
+    throw err;
+  }
+  return data;
+}
+```
+
+Auth wiring — the shape the prototype already expects:
+
+```js
+async function loginUser(email, password) {
+  var r = await api('POST', '/auth/login', { email: email, password: password });
+  localStorage.setItem(TOKEN_KEY, r.token);
+  return r.user;               // { id, email, name, ... } — same fields the UI reads
+}
+
+async function signupUser(email, password, name) {
+  var r = await api('POST', '/auth/register', { email: email, password: password, name: name });
+  localStorage.setItem(TOKEN_KEY, r.token);
+  return r.user;
+}
+
+async function logoutUser() {
+  try { await api('POST', '/auth/logout'); } catch (e) { /* token may be expired */ }
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+// Boot: restore the session instead of reading the localStorage auth store
+async function getCurrentUser() {
+  if (!localStorage.getItem(TOKEN_KEY)) return null;
+  try { return (await api('GET', '/auth/me')).user; }
+  catch (e) { localStorage.removeItem(TOKEN_KEY); return null; }
+}
+```
+
+A `401` on any call means the token expired or the session was revoked —
+clear the token and show the login screen.
+
+## Screen → endpoint map
+
+Every prototype screen/overlay and the calls that power it. "Refetch"
+means re-requesting the listed reads after a successful write, then
+`render()`.
+
+| Prototype screen / action | Backend calls |
+|---|---|
+| **Splash → boot** | `GET /auth/me` (restore session) |
+| **Login / Signup** (`loginScreenHtml`, `signupScreenHtml`) | `POST /auth/login` · `POST /auth/register` |
+| **Home** (`homeHtml`) — cash card, reval pills, drawer total, welcome card, feed preview | `GET /cash-drawer` (per-asset balances, `reportingValue`, `revaluationAfn`, totals) · `GET /reports/dashboard` (`setupNeeded`, pending count, defaults) · `GET /reports/activity?limit=15` |
+| **Initial-setup wizard** (`initialSetupHtml`, 3 steps) | `GET /assets` + `GET /settings` to pre-fill · one atomic `POST /setup` on finish |
+| **Ledger tab** (`generalLedgerTabHtml`) — today ribbon, filter chips, search, feed | `GET /reports/activity?kind=&search=&limit=&offset=` — `todaySummary` fills the In/Out/Net ribbon, `counts` fills the chip badges |
+| **Ledger statement** (`ledgerStatementHtml`, print/PDF) | `GET /reports/ledger-statement?period=&kind=` — render `entries` + `totals` into the print HTML client-side |
+| **Accounts tab** (`accountsCustomersHtml`) — holdings card, status chips, search | `GET /customers?search=&city=&status=` — `summary.holdings` fills the custodial card, `summary.statusCounts` the *On deposit / Owes you / Settled* strip, `total` the "Showing X of Y" header |
+| **Add customer** (`addCustomerHtml`, also from pickers) | `POST /customers` (with `openingBalances`) — then select the returned `customer.id` in the in-progress flow |
+| **Customer detail** (`customerDetailHtml`) | `GET /customers/:id` · `GET /customers/:id/transactions` (running balances included) |
+| **Customer statement** (`statementHtml`) | `GET /customers/:id/statement?from=&to=` |
+| **New entry: You Received / You Gave** (`newCustTxHtml`, incl. convert toggle) | `POST /customers/:id/transactions` — plain, or with `conversion: { toCurrency, rate }` for cross-currency intake; suggested rate from `GET /rates` |
+| **Transaction detail** (`customerTxDetailHtml`) — balance impact, conversion box | `GET /transactions/:id` (`balanceBefore` / `balanceAfter`, `conversion`) |
+| **Receipt share / copy** | `GET /transactions/:id/receipt` (preformatted text) |
+| **Delete entry** (`tx-delete`) | `DELETE /transactions/:id` → refetch customer detail |
+| **Branches** (Daftar → `accountsCounterpartiesHtml`) — list + net positions | `GET /counterparties?search=` (each row carries `positions`) |
+| **Add branch** (`addCpHtml`, also from hawala picker) | `POST /counterparties` (signed `openingBalances`) |
+| **Branch detail** (`cpDetailHtml`) | `GET /counterparties/:id` · `GET /counterparties/:id/hawalas` |
+| **Settle up** (`settleHtml`) | `POST /counterparties/:id/settle` (`settleCurrency`, `note`); rate preview from `GET /rates` |
+| **Branch statement** (`cpStatementHtml`) | `GET /counterparties/:id/statement?from=&to=` |
+| **Hawalas tab** (`pendingHtml`) — status/currency filters | `GET /hawalas?status=&currency=&search=` (badge count from `GET /hawalas/pending` or `dashboard.counts.pendingHawalas`) |
+| **New hawala** (`newHawalaHtml` + confirm) | `GET /hawalas/next-code` (code preview) · `GET /cities` · `GET /counterparties` · `GET /customers` (account-mode sender picker shows `balances`) · `POST /hawalas` on confirm — the server claims the real code, validates account balance (incl. commission), and writes the linked account debit atomically |
+| **Hawala detail** (`hawalaDetailHtml`) — timeline, financials | `GET /hawalas/:id` (`createdAt` → issued step, `paidAt` → paid step, `commissionMode` / `commissionAmount` → financials) |
+| **Mark Paid Out** | `POST /hawalas/:id/mark-paid` |
+| **FX form + confirm** (`fxFormHtml`, `confirmFxHtml`) | `GET /rates` (canonical-pair prefill) · `GET /cash-drawer` (stock check preview) · `POST /fx/trades` — server derives side, `toAmount`, realized P&L, and moves the drawer |
+| **FX ledger** (`fxLedgerHtml`) | `GET /fx/trades?limit=&offset=` · `GET /fx/positions` (qty, avg cost, unrealized P&L) |
+| **Rates screen / editor** (`ratesHtml`, `ratesOverlayHtml`, `editCashHtml`) | `GET /rates` · `PUT /rates` (send only changed assets; `prevSell` and `delta` come back computed) · `GET /rates/history?asset=` |
+| **Count Cash** (`cashCountHtml`) | `PUT /cash-drawer/count` — send only the assets actually counted; empty inputs are simply omitted |
+| **P&L screen** (`pnlScreenHtml`) | `GET /reports/pnl?period=today\|week\|month\|all` — `afn` + `reporting` blocks, `entries` for the breakdown list |
+| **Investments** (`investmentsScreenHtml`) | `GET /investments` — `equity` block fills the *Total invested / Current equity / Net return* headline · `POST /investments` from the add-modal (server moves the drawer too) |
+| **Assets** (`assetMgmtHtml`) | `GET /assets` · `PATCH /assets/:code/activation` (default assets return `422` on deactivation) |
+| **Default Currency** (`defaultsScreenHtml`) | `GET /settings` · `PUT /settings` |
+| **Daftar tab** (`shopHtml`) — profile, mini-stats, row subtitles | `GET /auth/me` · `GET /reports/dashboard` (`counts.entries`, `counts.counterparties + counts.customers` → Contacts) · `GET /reports/pnl?period=all` (P&L row subtitle) · `GET /investments` (Investments row subtitle) |
+| **Profile / password** | `PUT /auth/me` · `PUT /auth/me/password` |
+| **Sign out** | `POST /auth/logout` |
+
+## State-field → resource map
+
+Where each field of the prototype's `state` object lives on the server:
+
+| Prototype state | Server source of truth |
+|---|---|
+| `state.currentUser` | `GET /auth/me` |
+| `state.cashCounter` (+ `lastCount`) | `GET /cash-drawer` (`items[].balance`, `lastCountAt`) |
+| `state.rates` | `GET /rates` — canonical per-asset "1 asset = N AFN"; derive legacy pairs (`USD_PKR` etc.) client-side as `USD.sell / PKR.sell` |
+| `state.activeAssets` | `GET /assets` (`active` flag per asset) |
+| `state.defaults` (`reportingCurrency`, `tradeCurrency`) | `GET /settings` |
+| `state.counterparties[]` (+ nested `hawalas`) | `GET /counterparties`, `GET /counterparties/:id/hawalas` — hawalas are a top-level resource server-side, joined with counterparty info |
+| `state.customers[]` (+ nested `transactions`) | `GET /customers`, `GET /customers/:id/transactions` |
+| `state.fxTrades[]` | `GET /fx/trades` |
+| `state.investments[]` | `GET /investments` |
+| UI-only: `tab`, `route`, pickers, `search`, filters, `fabTooltipSeen`, splash | stays client-side |
+
+Field-name conventions when mapping rows: server ids are UUIDs (not
+`'h_' + Date.now()`), timestamps are ISO strings (`createdAt` replaces
+`ts`/`date` — format for display client-side), and hawala/customer city
+fields are `fromCity`/`toCity`/`cityCode` rather than `from`/`to`/`city`.
+
+## What the server now owns (don't recompute client-side)
+
+- **Pickup codes** — `POST /hawalas` claims the next code atomically from a
+  per-user sequence. `GET /hawalas/next-code` is only a form preview; never
+  generate codes with `genCode()`.
+- **Balances & positions** — customer balances (`balances`,
+  `balanceBefore/After`), counterparty `positions`, FX cost basis and
+  realized/unrealized P&L all come computed. The prototype's `customerBalance`,
+  `positions`, `avgCostFor`, `fxPositions`, `realizedPL` become dead code.
+- **P&L** — `GET /reports/pnl` recognizes hawala commission on the *payment*
+  date (`paidAt`) and includes fixed-mode commissions via `commissionAmount`
+  — both intentional upgrades over the prototype's issue-date, percent-only
+  `computePnL`.
+- **Validation** — insufficient drawer stock (FX), insufficient account
+  balance incl. commission (account-funded hawalas), inactive assets, and
+  unknown cities all come back as `422` with a message ready for
+  `showToast`.
+- **Multi-step writes** — hawala issuance + account debit, FX trade + drawer
+  move, settlement entries, initial setup: each is one endpoint, one DB
+  transaction. Never sequence these as separate calls client-side.
+
+## What stays client-side
+
+Rendering and navigation, print/PDF HTML building (`buildStatementPrintHtml`
+— feed it the statement endpoints' data), WhatsApp share links, clipboard
+copy, the FAB tooltip, splash timing, and cosmetic labels (Pashto strings,
+"You Received"/"You Gave" wording). Search and filters can run client-side
+on fetched pages, but the server supports them (`?search=`, `?status=`,
+`?kind=`…) so lists stay correct beyond the first page.
 
 ---
 

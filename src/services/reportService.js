@@ -152,12 +152,22 @@ export const reportService = {
    * Unified activity feed — hawalas, settlements, customer transactions, and
    * FX trades in one reverse-chronological stream, mirroring the app's
    * general ledger. `kind` filter: hawala | settle | custtx | fx.
+   *
+   * Alongside the filtered page it returns what the Ledger tab's chrome
+   * needs regardless of active filters:
+   *  - `counts` — entries per kind across the whole feed (filter-chip badges)
+   *  - `todaySummary` — today's money in / out / net in AFN-equivalent.
+   *    Only customer transactions and settlements carry a sign in the feed
+   *    (hawala and FX rows are displayed unsigned — a hawala moves the
+   *    counterparty position and an FX trade swaps one drawer asset for
+   *    another), so only those two kinds feed the ribbon.
    */
   async activityFeed(userId, { kind, search, from, to, limit = 100, offset = 0 } = {}) {
-    const [hawalas, custTxs, fxTrades] = await Promise.all([
+    const [hawalas, custTxs, fxTrades, rates] = await Promise.all([
       hawalaRepository.listAllWithCounterparty(userId),
       customerTransactionRepository.listAllForUser(userId),
-      fxTradeRepository.listChronological(userId)
+      fxTradeRepository.listChronological(userId),
+      rateRepository.mapForUser(userId)
     ]);
 
     const items = [];
@@ -233,6 +243,20 @@ export const reportService = {
       });
     }
 
+    const counts = { all: items.length, hawala: 0, settle: 0, custtx: 0, fx: 0 };
+    for (const item of items) counts[item.kind] += 1;
+
+    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+    let inflowAfn = 0;
+    let outflowAfn = 0;
+    for (const item of items) {
+      if (new Date(item.at) < todayStart) continue;
+      if (item.kind !== 'custtx' && item.kind !== 'settle') continue;
+      const afn = assetToAfn(rates, item.currency, item.amount);
+      if (item.direction === 'in') inflowAfn += afn;
+      else outflowAfn += afn;
+    }
+
     let filtered = items;
     if (kind) filtered = filtered.filter((i) => i.kind === kind);
     if (from) filtered = filtered.filter((i) => new Date(i.at) >= new Date(from));
@@ -248,6 +272,12 @@ export const reportService = {
 
     return {
       items: filtered.slice(offset, offset + limit),
+      counts,
+      todaySummary: {
+        inflowAfn: round6(inflowAfn),
+        outflowAfn: round6(outflowAfn),
+        netAfn: round6(inflowAfn - outflowAfn)
+      },
       pagination: {
         total: filtered.length,
         limit,
@@ -262,13 +292,14 @@ export const reportService = {
    * pending hawalas, today's realized P&L, today's cash movement, and counts.
    */
   async dashboard(userId) {
-    const [hawalas, assets, settings, fxTrades, counterparties, customers, setupNeeded] = await Promise.all([
+    const [hawalas, assets, settings, fxTrades, counterparties, customers, custTxs, setupNeeded] = await Promise.all([
       hawalaRepository.listAllWithCounterparty(userId),
       assetRepository.listActiveForUser(userId),
       settingsRepository.getForUser(userId),
       fxTradeRepository.listChronological(userId),
       counterpartyRepository.listForUser(userId, {}),
       customerRepository.listForUser(userId, {}),
+      customerTransactionRepository.listAllForUser(userId),
       setupService.isSetupNeeded(userId)
     ]);
     const currencies = assets.map((a) => a.code);
@@ -301,7 +332,13 @@ export const reportService = {
       counts: {
         counterparties: counterparties.length,
         customers: customers.length,
-        pendingHawalas: pending.length
+        pendingHawalas: pending.length,
+        // Raw ledger-entry tallies for the Daftar tab's mini-stats
+        // (opening/settle sentinels included, matching the app).
+        hawalas: hawalas.length,
+        customerTransactions: custTxs.length,
+        fxTrades: fxTrades.length,
+        entries: hawalas.length + custTxs.length
       },
       defaults: {
         reportingCurrency: settings.reportingCurrency,

@@ -4,7 +4,9 @@ import { customerRepository } from '../repositories/customerRepository.js';
 import { customerTransactionRepository } from '../repositories/customerTransactionRepository.js';
 import { assetRepository } from '../repositories/assetRepository.js';
 import { referenceRepository } from '../repositories/referenceRepository.js';
-import { customerBalances, withRunningBalances, txSign } from '../domain/positions.js';
+import {
+  balanceStatus, customerBalances, customerBalanceSummary, withRunningBalances, txSign
+} from '../domain/positions.js';
 import { CUSTOMER_TX_TYPES } from '../config/constants.js';
 import { round6 } from '../utils/money.js';
 
@@ -17,20 +19,58 @@ async function assertCity(cityCode) {
 }
 
 export const customerService = {
-  async list(userId, { search, cityCode } = {}) {
-    const [customers, assets] = await Promise.all([
-      customerRepository.listForUser(userId, { search, cityCode }),
+  /**
+   * All accounts with balances, plus the Accounts-screen aggregates. The
+   * summary and `total` always cover every account; `search` (name, short
+   * name, or phone), `cityCode`, and `status` (deposits | advances | settled)
+   * only narrow the returned list — mirroring the app, where the holdings
+   * card stays global while the chips filter the rows.
+   */
+  async list(userId, { search, cityCode, status } = {}) {
+    const [customers, allTxs, assets] = await Promise.all([
+      customerRepository.listForUser(userId, {}),
+      customerTransactionRepository.listAllForUser(userId),
       assetRepository.listActiveForUser(userId)
     ]);
     const currencies = assets.map((a) => a.code);
-    return Promise.all(customers.map(async (customer) => {
-      const txs = await customerTransactionRepository.listByCustomer(customer.id);
+
+    const txsByCustomer = new Map();
+    for (const tx of allTxs) {
+      if (!txsByCustomer.has(tx.customerId)) txsByCustomer.set(tx.customerId, []);
+      txsByCustomer.get(tx.customerId).push(tx);
+    }
+
+    const enriched = customers.map((customer) => {
+      const txs = txsByCustomer.get(customer.id) || [];
       return {
         ...customer,
         balances: customerBalances(txs, currencies),
         transactionCount: txs.length
       };
-    }));
+    });
+
+    const summary = customerBalanceSummary(enriched.map((c) => c.balances));
+
+    let filtered = enriched;
+    if (search) {
+      const q = search.toLowerCase();
+      filtered = filtered.filter((c) =>
+        c.name.toLowerCase().includes(q) ||
+        (c.shortName || '').toLowerCase().includes(q) ||
+        (c.phone || '').includes(search)
+      );
+    }
+    if (cityCode) filtered = filtered.filter((c) => c.cityCode === cityCode);
+    if (status) {
+      filtered = filtered.filter((c) => {
+        const s = balanceStatus(c.balances);
+        if (status === 'deposits') return s.hasDeposits;
+        if (status === 'advances') return s.hasAdvances;
+        return s.settled;
+      });
+    }
+
+    return { customers: filtered, summary, total: enriched.length };
   },
 
   async getById(userId, id) {

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import {
-  COMMISSION_MODES, COUNTERPARTY_TIERS, CUSTOMER_TX_TYPES, HAWALA_TYPES,
-  INVESTMENT_TYPES, PNL_PERIODS, SENDER_MODES
+  COMMISSION_MODES, COUNTERPARTY_TIERS, CUSTOMER_STATUS_FILTERS, CUSTOMER_TX_TYPES,
+  HAWALA_TYPES, INVESTMENT_TYPES, PNL_PERIODS, SENDER_MODES
 } from '../config/constants.js';
 
 // ---------------------------------------------------------------------------
@@ -178,6 +178,12 @@ export const hawalaListQuery = z.object({
 // ---------------------------------------------------------------------------
 // Customers & transactions
 // ---------------------------------------------------------------------------
+
+export const customerListQuery = z.object({
+  search: z.string().trim().max(100).optional(),
+  city: cityCode.optional(),
+  status: z.enum(CUSTOMER_STATUS_FILTERS).optional()
+});
 
 export const createCustomerSchema = z.object({
   name: shortText.min(1),

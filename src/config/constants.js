@@ -42,6 +42,14 @@ export const INVESTMENT_TYPES = Object.freeze({
 
 export const COUNTERPARTY_TIERS = Object.freeze(['core', 'regular']);
 
+/**
+ * Customer-list status filter (Accounts screen chips):
+ *   deposits — holds funds with the saraf in at least one currency
+ *   advances — owes the saraf in at least one currency
+ *   settled  — every balance within the flat threshold
+ */
+export const CUSTOMER_STATUS_FILTERS = Object.freeze(['deposits', 'advances', 'settled']);
+
 export const PNL_PERIODS = Object.freeze(['today', 'week', 'month', 'all']);
 
 /**

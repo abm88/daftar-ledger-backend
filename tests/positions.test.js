@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  counterpartyPositions, customerBalances, withRunningBalances
+  balanceStatus, counterpartyPositions, customerBalances, customerBalanceSummary,
+  withRunningBalances
 } from '../src/domain/positions.js';
 
 const CURRENCIES = ['USD', 'AFN', 'PKR'];
@@ -41,6 +42,38 @@ test('customer balances: opening/deposit credit, others debit', () => {
   assert.equal(b.USD, 9200);
   assert.equal(b.AFN, -1050000);
   assert.equal(b.PKR, -180000);
+});
+
+test('balance status: deposits and advances are independent, flat threshold applies', () => {
+  assert.deepEqual(
+    balanceStatus({ USD: 9200, AFN: -1050000, PKR: 0 }),
+    { hasDeposits: true, hasAdvances: true, settled: false }
+  );
+  assert.deepEqual(
+    balanceStatus({ USD: 0.4, AFN: -0.3 }),
+    { hasDeposits: false, hasAdvances: false, settled: true }
+  );
+  assert.deepEqual(
+    balanceStatus({ USD: 0, AFN: 100 }),
+    { hasDeposits: true, hasAdvances: false, settled: false }
+  );
+});
+
+test('customer balance summary aggregates holdings and status counts', () => {
+  const { holdings, statusCounts } = customerBalanceSummary([
+    { USD: 9200, AFN: -1050000, PKR: 0 },   // deposit + advance
+    { USD: 5700, AFN: -280000, PKR: 0 },    // deposit + advance
+    { USD: 2100, AFN: 0, PKR: 0 },          // deposit only
+    { USD: 0.2, AFN: 0, PKR: 0 }            // settled (within threshold)
+  ]);
+  assert.equal(holdings.USD.deposits, 17000);
+  assert.equal(holdings.USD.advances, 0);
+  assert.equal(holdings.USD.net, 17000);
+  assert.equal(holdings.AFN.deposits, 0);
+  assert.equal(holdings.AFN.advances, 1330000);
+  assert.equal(holdings.AFN.net, -1330000);
+  assert.equal(holdings.PKR.net, 0);
+  assert.deepEqual(statusCounts, { withDeposits: 3, withAdvances: 2, settled: 1 });
 });
 
 test('running balances annotate per-currency before/after', () => {

@@ -71,7 +71,7 @@ apiRouter.get('/hawalas/:id', validate(schemas.idParam, 'params'), hawalaControl
 apiRouter.post('/hawalas/:id/mark-paid', validate(schemas.idParam, 'params'), hawalaController.markPaid);
 
 // ---- Customers & their transactions ----------------------------------------
-apiRouter.get('/customers', customerController.list);
+apiRouter.get('/customers', validate(schemas.customerListQuery, 'query'), customerController.list);
 apiRouter.post('/customers', validate(schemas.createCustomerSchema), customerController.create);
 apiRouter.get('/customers/:id', validate(schemas.idParam, 'params'), customerController.get);
 apiRouter.put('/customers/:id', validate(schemas.idParam, 'params'), validate(schemas.updateCustomerSchema), customerController.update);
