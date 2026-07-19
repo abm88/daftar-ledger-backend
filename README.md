@@ -1206,6 +1206,7 @@ Entry detail with customer info and running balance before/after.
     "note": "Cash deposit",
     "hawalaId": null,
     "conversion": null,
+    "photos": [],
     "createdAt": "2026-07-08T14:25:49.705Z",
     "customerName": "Haji Dawood",
     "customerShortName": "Dawood",
@@ -1652,7 +1653,7 @@ P&L for the period, in AFN and translated to the reporting currency:
   "entries": [
     { "kind": "reval", "at": "2026-07-08T14:25:49.813Z", "label": "Reval GOLD · 116.638 · rate 5750 → 5800", "amountAfn": 5831.9 },
     { "kind": "fx", "id": "0c320684-…", "at": "2026-07-08T14:28:04.954Z", "label": "Sold 2000 USD → AFN @ 72", "amountAfn": 200 },
-    { "kind": "hawala", "id": "b7d2e9ef-…", "at": "2026-07-08T14:25:49.733Z", "label": "Sent hawala · KBL→HRT · 1% on 5000 USD", "counterparty": "A. Naseem", "amountAfn": 3595 }
+    { "kind": "hawala", "id": "b7d2e9ef-…", "at": "2026-07-08T14:25:49.733Z", "label": "Sent hawala · Mirwais Khan → Abdul Rahman · 1% on 5000 USD", "counterparty": "A. Naseem", "amountAfn": 3595 }
   ]
 }
 ```
@@ -1676,6 +1677,21 @@ FX trades, and expenses in one reverse-chronological stream. Hawala rows show
 {
   "items": [
     {
+      "kind": "hawala",
+      "id": "b7d2e9ef-b703-4142-800d-14ce6d35eb37",
+      "at": "2026-07-08T14:25:49.733Z",
+      "title": "Sent hawala · A. Naseem",
+      "subtitle": "Mirwais Khan → Abdul Rahman",
+      "amount": 5000,
+      "direction": "out",
+      "currency": "USD",
+      "status": "pending",
+      "code": "100001",
+      "senderName": "Mirwais Khan",
+      "receiverName": "Abdul Rahman",
+      "ref": { "type": "hawala", "id": "b7d2e9ef-b703-4142-800d-14ce6d35eb37" }
+    },
+    {
       "kind": "settle",
       "id": "12a5b23b-9c7e-40d1-8fe3-72050f332e5b",
       "at": "2026-07-08T14:25:49.786Z",
@@ -1685,6 +1701,18 @@ FX trades, and expenses in one reverse-chronological stream. Hawala rows show
       "direction": "out",
       "currency": "USD",
       "ref": { "type": "counterparty", "id": "33c63456-e871-4c0e-8daf-40da5e1b8008" }
+    },
+    {
+      "kind": "expense",
+      "id": "e3a1c0de-1f2b-4c3d-8e9f-a0b1c2d3e4f5",
+      "at": "2026-07-08T13:10:00.000Z",
+      "title": "Expense · Wali Partner",
+      "subtitle": "Shop rent",
+      "amount": 5000,
+      "direction": "out",
+      "currency": "AFN",
+      "teamMemberId": "16fd7bec-1199-4cb3-aaee-eadb3b4b1a81",
+      "ref": { "type": "expense", "id": "e3a1c0de-1f2b-4c3d-8e9f-a0b1c2d3e4f5", "teamMemberId": "16fd7bec-1199-4cb3-aaee-eadb3b4b1a81" }
     },
     {
       "kind": "fx",
@@ -1699,9 +1727,9 @@ FX trades, and expenses in one reverse-chronological stream. Hawala rows show
       "ref": { "type": "fxTrade", "id": "0c320684-42ef-48df-b268-3744abbcd5b5" }
     }
   ],
-  "counts": { "all": 9, "hawala": 4, "settle": 1, "custtx": 3, "fx": 1, "expense": 0 },
-  "todaySummary": { "inflowAfn": 7180, "outflowAfn": 500, "netAfn": 6680 },
-  "pagination": { "total": 9, "limit": 2, "offset": 0, "hasMore": true }
+  "counts": { "all": 10, "hawala": 4, "settle": 1, "custtx": 3, "fx": 1, "expense": 1 },
+  "todaySummary": { "inflowAfn": 7180, "outflowAfn": 5500, "netAfn": 1680 },
+  "pagination": { "total": 10, "limit": 4, "offset": 0, "hasMore": true }
 }
 ```
 
