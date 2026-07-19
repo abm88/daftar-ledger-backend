@@ -11,6 +11,8 @@ import { counterpartyController } from '../controllers/counterpartyController.js
 import { hawalaController } from '../controllers/hawalaController.js';
 import { customerController } from '../controllers/customerController.js';
 import { transactionController } from '../controllers/transactionController.js';
+import { teamController } from '../controllers/teamController.js';
+import { expenseController } from '../controllers/expenseController.js';
 import { fxController } from '../controllers/fxController.js';
 import { investmentController } from '../controllers/investmentController.js';
 import { settingsController } from '../controllers/settingsController.js';
@@ -68,7 +70,8 @@ apiRouter.get('/hawalas/pending', hawalaController.pending);
 apiRouter.get('/hawalas/next-code', hawalaController.nextCode);
 apiRouter.post('/hawalas', validate(schemas.issueHawalaSchema), hawalaController.issue);
 apiRouter.get('/hawalas/:id', validate(schemas.idParam, 'params'), hawalaController.get);
-apiRouter.post('/hawalas/:id/mark-paid', validate(schemas.idParam, 'params'), hawalaController.markPaid);
+apiRouter.post('/hawalas/:id/mark-paid', validate(schemas.idParam, 'params'), validate(schemas.payoutHawalaSchema), hawalaController.markPaid);
+apiRouter.delete('/hawalas/:id', validate(schemas.idParam, 'params'), hawalaController.cancel);
 
 // ---- Customers & their transactions ----------------------------------------
 apiRouter.get('/customers', validate(schemas.customerListQuery, 'query'), customerController.list);
@@ -83,6 +86,18 @@ apiRouter.get('/customers/:id/statement', validate(schemas.idParam, 'params'), v
 apiRouter.get('/transactions/:id', validate(schemas.idParam, 'params'), transactionController.get);
 apiRouter.delete('/transactions/:id', validate(schemas.idParam, 'params'), transactionController.remove);
 apiRouter.get('/transactions/:id/receipt', validate(schemas.idParam, 'params'), transactionController.receipt);
+
+// ---- Team members & expenses ------------------------------------------------
+apiRouter.get('/team', teamController.list);
+apiRouter.post('/team', validate(schemas.createTeamMemberSchema), teamController.create);
+apiRouter.get('/team/:id', validate(schemas.idParam, 'params'), teamController.get);
+apiRouter.put('/team/:id', validate(schemas.idParam, 'params'), validate(schemas.updateTeamMemberSchema), teamController.update);
+apiRouter.delete('/team/:id', validate(schemas.idParam, 'params'), teamController.remove);
+
+apiRouter.get('/expenses', validate(schemas.expenseListQuery, 'query'), expenseController.list);
+apiRouter.post('/expenses', validate(schemas.createExpenseSchema), expenseController.create);
+apiRouter.get('/expenses/:id', validate(schemas.idParam, 'params'), expenseController.get);
+apiRouter.delete('/expenses/:id', validate(schemas.idParam, 'params'), expenseController.remove);
 
 // ---- FX trading -------------------------------------------------------------
 apiRouter.get('/fx/trades', fxController.list);

@@ -1,6 +1,7 @@
 import { AppError } from '../utils/AppError.js';
 import { hawalaRepository } from '../repositories/hawalaRepository.js';
 import { customerTransactionRepository } from '../repositories/customerTransactionRepository.js';
+import { expenseRepository } from '../repositories/expenseRepository.js';
 import { fxTradeRepository } from '../repositories/fxTradeRepository.js';
 import { cashDrawerRepository } from '../repositories/cashDrawerRepository.js';
 import { rateRepository } from '../repositories/rateRepository.js';
@@ -89,7 +90,7 @@ export const reportService = {
         kind: 'hawala',
         id: h.id,
         at: realizedAt,
-        label: `${h.type === 'send' ? 'Sent' : 'Received'} hawala · ${h.fromCity}→${h.toCity} · ` +
+        label: `${h.type === 'send' ? 'Sent' : 'Received'} hawala · ${h.senderName} → ${h.receiverName} · ` +
                (h.commissionMode === 'fixed'
                  ? `${h.commissionAmount} ${h.currency} fee on ${h.amount} ${h.currency}`
                  : `${h.commissionPct}% on ${h.amount} ${h.currency}`),
@@ -149,24 +150,25 @@ export const reportService = {
   },
 
   /**
-   * Unified activity feed — hawalas, settlements, customer transactions, and
-   * FX trades in one reverse-chronological stream, mirroring the app's
-   * general ledger. `kind` filter: hawala | settle | custtx | fx.
+   * Unified activity feed — hawalas, settlements, customer transactions, FX
+   * trades, and expenses in one reverse-chronological stream, mirroring the
+   * app's general ledger. `kind` filter: hawala | settle | custtx | fx | expense.
    *
    * Alongside the filtered page it returns what the Ledger tab's chrome
    * needs regardless of active filters:
    *  - `counts` — entries per kind across the whole feed (filter-chip badges)
    *  - `todaySummary` — today's money in / out / net in AFN-equivalent.
-   *    Only customer transactions and settlements carry a sign in the feed
-   *    (hawala and FX rows are displayed unsigned — a hawala moves the
-   *    counterparty position and an FX trade swaps one drawer asset for
-   *    another), so only those two kinds feed the ribbon.
+   *    Customer transactions, settlements, and expenses carry a sign in the
+   *    feed and feed the ribbon (hawala and FX rows are displayed unsigned — a
+   *    hawala moves the counterparty position and an FX trade swaps one drawer
+   *    asset for another). Expenses are outflows and never touch the drawer.
    */
   async activityFeed(userId, { kind, search, from, to, limit = 100, offset = 0 } = {}) {
-    const [hawalas, custTxs, fxTrades, rates] = await Promise.all([
+    const [hawalas, custTxs, fxTrades, expenses, rates] = await Promise.all([
       hawalaRepository.listAllWithCounterparty(userId),
       customerTransactionRepository.listAllForUser(userId),
       fxTradeRepository.listChronological(userId),
+      expenseRepository.listAllForUser(userId),
       rateRepository.mapForUser(userId)
     ]);
 
@@ -194,13 +196,16 @@ export const reportService = {
         id: h.id,
         at: h.createdAt,
         title: `${isSend ? 'Sent' : 'Received'} hawala · ${h.counterpartyShortName}`,
-        subtitle: `${h.fromCity} → ${h.toCity} · ${h.senderName} → ${h.receiverName}` +
+        // Ledger rows carry sender → receiver names; city codes are not shown.
+        subtitle: `${h.senderName} → ${h.receiverName}` +
                   (h.status === 'pending' ? ' · pending' : ''),
         amount: h.amount,
         direction: isSend ? 'out' : 'in',
         currency: h.currency,
         status: h.status,
         code: h.code,
+        senderName: h.senderName,
+        receiverName: h.receiverName,
         ref: { type: 'hawala', id: h.id }
       });
     }
@@ -243,15 +248,33 @@ export const reportService = {
       });
     }
 
-    const counts = { all: items.length, hawala: 0, settle: 0, custtx: 0, fx: 0 };
+    // Expenses — business costs recorded against a team member (money out).
+    // They appear as outflows in the feed but never move the cash drawer.
+    for (const x of expenses) {
+      items.push({
+        kind: 'expense',
+        id: x.id,
+        at: x.createdAt,
+        title: `Expense · ${x.teamMemberName}`,
+        subtitle: x.note || 'Business expense',
+        amount: Number(x.amount),
+        direction: 'out',
+        currency: x.currency,
+        teamMemberId: x.teamMemberId,
+        ref: { type: 'expense', id: x.id, teamMemberId: x.teamMemberId }
+      });
+    }
+
+    const counts = { all: items.length, hawala: 0, settle: 0, custtx: 0, fx: 0, expense: 0 };
     for (const item of items) counts[item.kind] += 1;
 
     const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+    const RIBBON_KINDS = new Set(['custtx', 'settle', 'expense']);
     let inflowAfn = 0;
     let outflowAfn = 0;
     for (const item of items) {
       if (new Date(item.at) < todayStart) continue;
-      if (item.kind !== 'custtx' && item.kind !== 'settle') continue;
+      if (!RIBBON_KINDS.has(item.kind)) continue;
       const afn = assetToAfn(rates, item.currency, item.amount);
       if (item.direction === 'in') inflowAfn += afn;
       else outflowAfn += afn;

@@ -147,12 +147,16 @@ export const customerService = {
    * currency and the original intake is kept as metadata, exactly like the
    * app's convert toggle.
    */
-  async addTransaction(userId, customerId, { type, amount, currency, note, conversion }) {
+  async addTransaction(userId, customerId, { type, amount, currency, note, conversion, photos, photo }) {
     const customer = await customerRepository.findById(userId, customerId);
     if (!customer) throw AppError.notFound('Customer not found');
     if (type === CUSTOMER_TX_TYPES.OPENING) {
       throw AppError.unprocessable('Opening entries are created with the account');
     }
+
+    // Accept both the array form and the legacy single `photo`; store the union.
+    const photoList = [...(photos || [])];
+    if (photo) photoList.push(photo);
 
     let creditedAmount = amount;
     let creditedCurrency = currency;
@@ -193,7 +197,8 @@ export const customerService = {
       amount: creditedAmount,
       currency: creditedCurrency,
       note: finalNote,
-      conversion: conversionMeta
+      conversion: conversionMeta,
+      photos: photoList
     });
 
     return this.getTransaction(userId, txId);

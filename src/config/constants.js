@@ -15,6 +15,8 @@ export const HAWALA_TYPES = Object.freeze({ SEND: 'send', RECV: 'recv', SETTLE: 
 export const HAWALA_STATUS = Object.freeze({ PENDING: 'pending', PAID: 'paid' });
 export const SENDER_MODES = Object.freeze({ CASH: 'cash', ACCOUNT: 'account' });
 export const COMMISSION_MODES = Object.freeze({ PERCENT: 'percent', FIXED: 'fixed' });
+/** How a received hawala is paid out to the recipient. */
+export const PAYOUT_METHODS = Object.freeze({ CASH: 'cash', ACCOUNT: 'account' });
 
 /** Sentinel code used for opening-balance and settlement ledger entries. */
 export const SENTINEL_CODE = '000000';
@@ -41,6 +43,9 @@ export const INVESTMENT_TYPES = Object.freeze({
 });
 
 export const COUNTERPARTY_TIERS = Object.freeze(['core', 'regular']);
+
+/** Roles a team member (partner or staff) can hold. */
+export const TEAM_ROLES = Object.freeze(['Partner', 'Owner', 'Cashier', 'Runner', 'Staff']);
 
 /**
  * Customer-list status filter (Accounts screen chips):

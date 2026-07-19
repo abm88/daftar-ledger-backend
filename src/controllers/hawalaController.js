@@ -37,7 +37,15 @@ export const hawalaController = {
   }),
 
   markPaid: asyncHandler(async (req, res) => {
-    const hawala = await hawalaService.markPaid(req.userId, req.params.id);
+    const hawala = await hawalaService.markPaid(req.userId, req.params.id, {
+      method: req.body.method,
+      payoutCustomerId: req.body.payoutCustomerId
+    });
     res.json({ hawala });
+  }),
+
+  cancel: asyncHandler(async (req, res) => {
+    const result = await hawalaService.cancel(req.userId, req.params.id);
+    res.json({ cancelled: true, ...result });
   })
 };

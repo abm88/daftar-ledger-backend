@@ -5,7 +5,7 @@ const COLUMNS = `
   h.sender_name, h.receiver_name, h.amount, h.currency,
   h.commission_mode, h.commission_pct, h.commission_amount,
   h.code, h.status, h.sender_customer_id, h.is_opening, h.note,
-  h.created_at, h.paid_at
+  h.payout_method, h.payout_customer_id, h.created_at, h.paid_at
 `;
 
 const WITH_CP = `
@@ -95,13 +95,27 @@ export const hawalaRepository = {
     return rows[0].id;
   },
 
-  async markPaid(userId, id, client) {
+  /**
+   * Marks a pending hawala paid out, recording the payout method and (for
+   * account payouts) the credited customer. paid_at is the payout timestamp.
+   */
+  async markPaid(userId, id, { method = 'cash', payoutCustomerId = null } = {}, client) {
     const { rows } = await db(client).query(
-      `UPDATE hawalas SET status = 'paid', paid_at = now()
+      `UPDATE hawalas
+         SET status = 'paid', paid_at = now(),
+             payout_method = $3, payout_customer_id = $4
        WHERE user_id = $1 AND id = $2 AND status = 'pending'
        RETURNING id`,
-      [userId, id]
+      [userId, id, method, payoutCustomerId]
     );
     return rows.length > 0;
+  },
+
+  async deleteById(userId, id, client) {
+    const { rowCount } = await db(client).query(
+      'DELETE FROM hawalas WHERE user_id = $1 AND id = $2',
+      [userId, id]
+    );
+    return rowCount > 0;
   }
 };
