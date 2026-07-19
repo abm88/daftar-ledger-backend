@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import {
   COMMISSION_MODES, COUNTERPARTY_TIERS, CUSTOMER_STATUS_FILTERS, CUSTOMER_TX_TYPES,
-  HAWALA_TYPES, INVESTMENT_TYPES, PNL_PERIODS, SENDER_MODES
+  HAWALA_TYPES, INVESTMENT_TYPES, PAYOUT_METHODS, PNL_PERIODS, SENDER_MODES, TEAM_ROLES
 } from '../config/constants.js';
 
 // ---------------------------------------------------------------------------
@@ -140,11 +140,17 @@ export const settleSchema = z.object({
 export const issueHawalaSchema = z.object({
   type: z.enum([HAWALA_TYPES.SEND, HAWALA_TYPES.RECV]),
   counterpartyId: uuid,
-  fromCity: cityCode,
-  toCity: cityCode,
+  // Route (from → to) is auto-derived from direction + the counterparty branch
+  // server-side; these are accepted only as a fallback when the saraf's own
+  // city is unknown, and otherwise ignored.
+  fromCity: cityCode.optional(),
+  toCity: cityCode.optional(),
   amount: positiveAmount,
   currency: assetCode,
   receiverName: shortText.min(1),
+  // Received hawalas carry the origin branch's pickup code (entered by the
+  // saraf); sent hawalas claim the next code from the per-user sequence.
+  code: z.string().trim().min(1).max(6).optional(),
   senderMode: z.enum([SENDER_MODES.CASH, SENDER_MODES.ACCOUNT]).default(SENDER_MODES.CASH),
   senderName: shortText.optional(),
   senderCustomerId: uuid.optional(),
@@ -154,14 +160,33 @@ export const issueHawalaSchema = z.object({
   commissionFixed: nonNegativeAmount.optional(),
   note: noteText.optional()
 }).superRefine((v, ctx) => {
-  if (v.senderMode === SENDER_MODES.ACCOUNT && !v.senderCustomerId) {
+  const isRecv = v.type === HAWALA_TYPES.RECV;
+  if (isRecv) {
+    // Receive is a two-phase flow: recorded now, paid out later. It needs the
+    // origin code and both names; account funding never applies at record time.
+    if (!v.code?.trim()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['code'], message: 'Pickup code is required for received hawalas' });
+    }
+    if (!v.senderName?.trim()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['senderName'], message: 'Sender name is required for received hawalas' });
+    }
+  } else if (v.senderMode === SENDER_MODES.ACCOUNT && !v.senderCustomerId) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['senderCustomerId'], message: 'Required when senderMode is "account"' });
-  }
-  if (v.senderMode === SENDER_MODES.CASH && !v.senderName?.trim()) {
+  } else if (v.senderMode === SENDER_MODES.CASH && !v.senderName?.trim()) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['senderName'], message: 'Required when senderMode is "cash"' });
   }
   if (v.commissionMode === COMMISSION_MODES.FIXED && v.commissionFixed === undefined) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['commissionFixed'], message: 'Required when commissionMode is "fixed"' });
+  }
+});
+
+/** Body for POST /hawalas/:id/mark-paid — payout of a pending hawala. */
+export const payoutHawalaSchema = z.object({
+  method: z.enum([PAYOUT_METHODS.CASH, PAYOUT_METHODS.ACCOUNT]).default(PAYOUT_METHODS.CASH),
+  payoutCustomerId: uuid.optional()
+}).superRefine((v, ctx) => {
+  if (v.method === PAYOUT_METHODS.ACCOUNT && !v.payoutCustomerId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['payoutCustomerId'], message: 'Required when method is "account"' });
   }
 });
 
@@ -204,6 +229,11 @@ export const updateCustomerSchema = z.object({
   notes: noteText.optional()
 });
 
+/** A photo attachment: an image data URL or a hosted URL. */
+const photoValue = z.string().trim().min(1).max(2_000_000);
+/** Up to 10 attachments per transaction, matching the app. */
+const photosArray = z.array(photoValue).max(10);
+
 export const createTransactionSchema = z.object({
   type: z.enum([
     CUSTOMER_TX_TYPES.DEPOSIT, CUSTOMER_TX_TYPES.WITHDRAWAL,
@@ -212,10 +242,43 @@ export const createTransactionSchema = z.object({
   amount: positiveAmount,
   currency: assetCode,
   note: noteText.optional(),
+  // Optional attachments: `photos` is the array form; `photo` is the legacy
+  // single-value form kept for backward compatibility. Either may be sent.
+  photos: photosArray.optional(),
+  photo: photoValue.optional(),
   conversion: z.object({
     toCurrency: assetCode,
     rate: positiveAmount
   }).optional()
+});
+
+// ---------------------------------------------------------------------------
+// Team members & expenses
+// ---------------------------------------------------------------------------
+
+export const createTeamMemberSchema = z.object({
+  name: shortText.min(1),
+  role: z.enum(TEAM_ROLES).optional(),
+  phone: phone.optional(),
+  initial: z.string().trim().max(8).optional()
+});
+
+export const updateTeamMemberSchema = z.object({
+  name: shortText.min(1).optional(),
+  role: z.enum(TEAM_ROLES).optional(),
+  phone: phone.optional(),
+  initial: z.string().trim().max(8).optional()
+}).refine((v) => Object.keys(v).length > 0, { message: 'Provide at least one field to update' });
+
+export const createExpenseSchema = z.object({
+  teamMemberId: uuid,
+  amount: positiveAmount,
+  currency: assetCode,
+  note: noteText.optional()
+});
+
+export const expenseListQuery = z.object({
+  teamMemberId: uuid.optional()
 });
 
 // ---------------------------------------------------------------------------
@@ -244,7 +307,7 @@ export const createInvestmentSchema = z.object({
 export const pnlQuery = z.object({ period: z.enum(PNL_PERIODS).default('all') });
 
 export const activityQuery = z.object({
-  kind: z.enum(['hawala', 'settle', 'custtx', 'fx']).optional(),
+  kind: z.enum(['hawala', 'settle', 'custtx', 'fx', 'expense']).optional(),
   search: z.string().trim().max(100).optional(),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
@@ -259,7 +322,7 @@ export const statementRangeQuery = z.object({
 
 export const ledgerStatementQuery = z.object({
   period: z.enum(PNL_PERIODS).default('all'),
-  kind: z.enum(['hawala', 'settle', 'custtx', 'fx']).optional(),
+  kind: z.enum(['hawala', 'settle', 'custtx', 'fx', 'expense']).optional(),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional()
 });

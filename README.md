@@ -9,14 +9,19 @@ Node.js + PostgreSQL backend for **Daftar**, a ledger app for Afghan sarafs
 - **Multi-asset cash drawer** — fiat currencies (USD, AFN, PKR, EUR, GBP, SAR,
   AED) and metals (gold/silver in grams, tola display), cash counts, initial
   setup, today's cash movement.
-- **Hawala transfers** — issue against counterparty sarafs with percent/fixed
-  commissions, sequential 6-digit pickup codes, pending → paid lifecycle,
-  cash- or customer-account-funded senders, per-counterparty positions and
-  one-tap settlement.
+- **Hawala transfers** — send and receive against counterparty sarafs with
+  percent/fixed commissions and auto-derived routes. Sends claim a sequential
+  6-digit code and can be cash- or customer-account-funded; receives are a
+  two-phase flow (recorded pending with no money movement, then paid out by cash
+  or credited to an account net of fee). Pending hawalas can be cancelled with
+  full reversal. Per-counterparty positions and one-tap settlement.
 - **Customer accounts** — deposits, withdrawals, charges, credit advances,
-  cross-currency intake with conversion metadata, running balances,
-  statements and receipts, status filters (deposits / advances / settled)
-  and the custodial-holdings summary behind the Accounts screen.
+  cross-currency intake with conversion metadata, photo attachments, running
+  balances, statements and receipts, status filters (deposits / advances /
+  settled) and the custodial-holdings summary behind the Accounts screen.
+- **Team & expenses** — partners/staff (Partner, Owner, Cashier, Runner,
+  Staff) with per-person expense totals; expenses post to the ledger as
+  outflows without touching the cash drawer.
 - **FX trading** — canonical rate quoting, drawer-stock validation,
   weighted-average cost basis, realized and unrealized P&L, open positions.
 - **Owner investments** — opening capital, additions, withdrawals tied to the
@@ -149,9 +154,11 @@ List endpoints that page accept `?limit=` (default 50, max 200) and
 | [Rates](#rates) | `GET /rates` · `PUT /rates` · `GET /rates/history` |
 | [Cash drawer](#cash-drawer) | `GET /cash-drawer` · `PUT /cash-drawer/count` · `POST /cash-drawer/initial-setup` · `GET /cash-drawer/today-movement` |
 | [Counterparties](#counterparties) | `GET /counterparties` · `POST /counterparties` · `GET /counterparties/:id` · `PUT /counterparties/:id` · `DELETE /counterparties/:id` · `GET /counterparties/:id/hawalas` · `POST /counterparties/:id/settle` · `GET /counterparties/:id/statement` |
-| [Hawalas](#hawalas) | `GET /hawalas` · `GET /hawalas/pending` · `GET /hawalas/next-code` · `POST /hawalas` · `GET /hawalas/:id` · `POST /hawalas/:id/mark-paid` |
+| [Hawalas](#hawalas) | `GET /hawalas` · `GET /hawalas/pending` · `GET /hawalas/next-code` · `POST /hawalas` · `GET /hawalas/:id` · `POST /hawalas/:id/mark-paid` · `DELETE /hawalas/:id` |
 | [Customers](#customers) | `GET /customers` · `POST /customers` · `GET /customers/:id` · `PUT /customers/:id` · `DELETE /customers/:id` · `GET /customers/:id/transactions` · `POST /customers/:id/transactions` · `GET /customers/:id/statement` |
 | [Transactions](#transactions) | `GET /transactions/:id` · `DELETE /transactions/:id` · `GET /transactions/:id/receipt` |
+| [Team members](#team-members) | `GET /team` · `POST /team` · `GET /team/:id` · `PUT /team/:id` · `DELETE /team/:id` |
+| [Expenses](#expenses) | `GET /expenses` · `POST /expenses` · `GET /expenses/:id` · `DELETE /expenses/:id` |
 | [FX trades](#fx-trades) | `GET /fx/trades` · `POST /fx/trades` · `GET /fx/positions` |
 | [Investments](#investments) | `GET /investments` · `POST /investments` |
 | [Settings](#settings) | `GET /settings` · `PUT /settings` |
@@ -740,8 +747,20 @@ entries; positions always reflect the full history.
 
 A hawala ledger entry. `type` is `send` (value sent on the counterparty's
 behalf) or `recv` (received on ours); `settle` rows are system-written by
-settlements. Pickup `code`s are 6-digit, sequential per saraf, claimed
-atomically (`000000` is reserved for sentinels).
+settlements.
+
+- **Send** debits nothing on cash/walk-in issue; an account-funded send debits
+  the sender's customer account immediately. Its pickup `code` is 6-digit,
+  sequential per saraf, claimed atomically (`000000` is reserved for sentinels).
+- **Receive** is a two-phase flow: it is recorded as `pending` with **zero**
+  financial impact and carries the origin branch's pickup `code` (entered by the
+  saraf, not claimed from the sequence). It only moves money on payout — see
+  `mark-paid`. Payout metadata (`payoutMethod`, `payoutCustomerId`) is set then;
+  `paidAt` is the payout timestamp.
+
+The route (`fromCity` → `toCity`) is **auto-derived** from direction and the
+counterparty branch, bridged by the saraf's own city — it is not user-entered.
+A `send` routes local → partner; a `recv` routes partner → local.
 
 **The hawala object** (returned everywhere):
 
@@ -765,6 +784,8 @@ atomically (`000000` is reserved for sentinels).
   "senderCustomerId": null,
   "isOpening": false,
   "note": "",
+  "payoutMethod": null,
+  "payoutCustomerId": null,
   "createdAt": "2026-07-08T14:25:49.733Z",
   "paidAt": null,
   "counterpartyName": "Sarai Qandahari — Agha Naseem",
@@ -811,16 +832,16 @@ Peeks the next pickup code for form pre-fill — does **not** claim it.
 
 ### `POST /hawalas`
 
-Issues a hawala (status `pending`).
+Issues a hawala (status `pending`). `fromCity`/`toCity` are optional and
+ignored when the saraf's shop city is known (the route is auto-derived); they
+are used only as a fallback when the shop city is unset.
 
-**Payload — cash-funded sender** (walk-in pays at the counter):
+**Payload — cash-funded send** (walk-in pays at the counter):
 
 ```json
 {
   "type": "send",
   "counterpartyId": "33c63456-e871-4c0e-8daf-40da5e1b8008",
-  "fromCity": "KBL",
-  "toCity": "HRT",
   "amount": 5000,
   "currency": "USD",
   "receiverName": "Abdul Rahman",
@@ -832,15 +853,13 @@ Issues a hawala (status `pending`).
 }
 ```
 
-**Payload — account-funded sender with a fixed fee** (debited from a customer
+**Payload — account-funded send with a fixed fee** (debited from a customer
 account):
 
 ```json
 {
   "type": "send",
   "counterpartyId": "33c63456-e871-4c0e-8daf-40da5e1b8008",
-  "fromCity": "KBL",
-  "toCity": "HRT",
   "amount": 2000,
   "currency": "USD",
   "receiverName": "Karim Shah",
@@ -851,17 +870,36 @@ account):
 }
 ```
 
+**Payload — receive** (records an incoming hawala, zero financial impact):
+
+```json
+{
+  "type": "recv",
+  "counterpartyId": "33c63456-e871-4c0e-8daf-40da5e1b8008",
+  "amount": 800,
+  "currency": "USD",
+  "code": "100777",
+  "senderName": "Origin Sender",
+  "receiverName": "Ali Khan"
+}
+```
+
 Rules:
 
-- `senderMode: "cash"` requires `senderName`; `"account"` requires
-  `senderCustomerId` (the sender name resolves to the customer's name).
-- Account mode writes a linked `withdrawal` on the customer's account for
+- **Send** — `senderMode: "cash"` requires `senderName`; `"account"` requires
+  `senderCustomerId` (the sender name resolves to the customer's name). Account
+  mode writes a linked `withdrawal` on the customer's account for
   `amount + commission`, tagged with `hawalaId`. The account may go negative —
   the debit adds to the customer's outstanding balance (what they owe the
-  saraf); no minimum balance is required.
-- `commissionMode: "percent"` uses `commissionPct` (default 1.0);
-  `"fixed"` requires `commissionFixed`, a fee in the hawala currency.
-- `type` is `send` or `recv`. Cities must exist in `/cities`.
+  saraf); no minimum balance is required. The pickup code is claimed from the
+  per-user sequence.
+- **Receive** — requires `code` (the origin branch's pickup code) and
+  `senderName`. Recorded as `pending` with no cash or account movement; paid out
+  later via `mark-paid`. `commissionPct` defaults to `0` (the origin office
+  usually keeps the fee).
+- `commissionMode: "percent"` uses `commissionPct` (default `1.0` for sends,
+  `0` for receives); `"fixed"` requires `commissionFixed`, a fee in the hawala
+  currency.
 
 **Response `201`:** `{ "hawala": { ... } }` — the account-funded example
 returns:
@@ -892,14 +930,45 @@ Single hawala with counterparty info: `{ "hawala": { ... } }`
 
 ### `POST /hawalas/:id/mark-paid`
 
-The recipient collected the money — flips `pending` → `paid`, stamps
-`paidAt`, and the amount starts counting in counterparty positions and
-commission P&L. No payload.
+Pays out a pending hawala — flips `pending` → `paid`, stamps `paidAt`, and
+recognizes commission P&L.
+
+**Payload** (optional; defaults to cash):
+
+```json
+{ "method": "account", "payoutCustomerId": "4fac4aa5-9b6f-468b-bf09-5aa58009e9ea" }
+```
+
+- `method: "cash"` (default) — status → `paid`, no account entry.
+- `method: "account"` — status → `paid`, plus a linked `deposit` of
+  `amount − commission` to `payoutCustomerId`, tagged with `hawalaId`.
+  `payoutCustomerId` is required. Account payout applies to **received**
+  hawalas only (a `422` otherwise).
 
 **Response `200`** (`409` when already paid):
 
 ```json
-{ "hawala": { "...": "…", "status": "paid", "paidAt": "2026-07-08T14:25:49.751Z" } }
+{
+  "hawala": {
+    "...": "…",
+    "status": "paid",
+    "payoutMethod": "account",
+    "payoutCustomerId": "4fac4aa5-9b6f-468b-bf09-5aa58009e9ea",
+    "paidAt": "2026-07-08T14:25:49.751Z"
+  }
+}
+```
+
+### `DELETE /hawalas/:id`
+
+Cancels a **pending** hawala: removes the record and reverses any linked
+customer transactions (deletes entries where `hawalaId` matches), so no phantom
+balance remains. Paid hawalas cannot be cancelled (`409`).
+
+**Response `200`:**
+
+```json
+{ "cancelled": true, "id": "2c15cdad-0dd4-4c11-8c39-b859c55e804c", "reversedTransactions": 1 }
 ```
 
 ---
@@ -1015,6 +1084,7 @@ currency) before and after it.
       "note": "Opening deposit",
       "hawalaId": null,
       "conversion": null,
+      "photos": [],
       "createdAt": "2026-07-08T14:25:49.683Z",
       "balanceBefore": 0,
       "balanceAfter": 8500
@@ -1022,6 +1092,9 @@ currency) before and after it.
   ]
 }
 ```
+
+Every transaction exposes `photos` as an array (empty when none). A legacy
+single `photo` scalar, if present, is folded into `photos` on read.
 
 ### `POST /customers/:id/transactions`
 
@@ -1032,6 +1105,19 @@ created with the account and can't be posted here).
 
 ```json
 { "type": "deposit", "amount": 3200, "currency": "USD", "note": "Cash deposit" }
+```
+
+**Payload — with photo attachments** (You Received / You Gave). Send `photos`
+(an array of up to 10 image data URLs or hosted URLs) and/or a legacy single
+`photo`; both are stored in the `photos` array:
+
+```json
+{
+  "type": "deposit",
+  "amount": 3200,
+  "currency": "USD",
+  "photos": ["data:image/jpeg;base64,/9j/4AAQ…", "https://cdn.example/receipt.jpg"]
+}
 ```
 
 **Payload — cross-currency intake** ("received 1,000 USD, credit the account
@@ -1066,6 +1152,7 @@ target currency and keeps the original intake as metadata:
       "creditedAmount": 71900,
       "creditedCurrency": "AFN"
     },
+    "photos": [],
     "createdAt": "2026-07-08T14:25:49.711Z",
     "customerName": "Haji Dawood",
     "customerShortName": "Dawood",
@@ -1152,6 +1239,127 @@ Plain-text receipt in the app's share format, plus the full transaction.
   "transaction": { "...": "…same shape as GET /transactions/:id" }
 }
 ```
+
+---
+
+## Team members
+
+Partners and staff the saraf records expenses against. Per-user data, blank for
+a new saraf. `role` is one of `Partner`, `Owner`, `Cashier`, `Runner`, `Staff`.
+
+### `GET /team`
+
+Every member with their expense count and total, converted to the reporting
+currency.
+
+**Response `200`:**
+
+```json
+{
+  "members": [
+    {
+      "id": "16fd7bec-1199-4cb3-aaee-eadb3b4b1a81",
+      "name": "Wali Partner",
+      "role": "Partner",
+      "phone": "+93700000001",
+      "initial": "W",
+      "createdAt": "2026-07-19T09:00:00.000Z",
+      "updatedAt": "2026-07-19T09:00:00.000Z",
+      "expenseCount": 2,
+      "expenseTotalReporting": 6436
+    }
+  ],
+  "reportingCurrency": "AFN",
+  "total": 1
+}
+```
+
+### `POST /team`
+
+Creates a member. `name` is required; `role` defaults to `Staff`; `initial`
+defaults to the first letter of the name.
+
+```json
+{ "name": "Wali Partner", "role": "Partner", "phone": "+93700000001" }
+```
+
+**Response `201`:** `{ "member": { ... } }`
+
+### `GET /team/:id`
+
+One member with their full expense history and reporting-currency total:
+
+```json
+{
+  "member": {
+    "id": "16fd7bec-…",
+    "name": "Wali Partner",
+    "role": "Partner",
+    "expenses": [ { "...": "expense objects, newest first" } ],
+    "expenseCount": 2,
+    "expenseTotalReporting": 6436,
+    "reportingCurrency": "AFN"
+  }
+}
+```
+
+### `PUT /team/:id`
+
+Partial update (`name`, `role`, `phone`, `initial`). `{ "member": { ... } }`.
+
+### `DELETE /team/:id`
+
+Removes a member (and cascades their expenses). `204`.
+
+---
+
+## Expenses
+
+Business costs, each recorded against a team member. Expenses appear in the
+ledger/activity feed as **outflows** but never move the cash drawer. `category`
+and `against` from earlier prototypes are deprecated — an expense is identified
+by its team member and free-text note.
+
+**The expense object:**
+
+```json
+{
+  "id": "exp-…",
+  "teamMemberId": "16fd7bec-…",
+  "teamMemberName": "Wali Partner",
+  "teamMemberRole": "Partner",
+  "amount": 5000,
+  "currency": "AFN",
+  "note": "Shop rent",
+  "createdAt": "2026-07-19T09:30:00.000Z",
+  "ts": 1784425800000,
+  "date": "2026-07-19"
+}
+```
+
+### `GET /expenses?teamMemberId=`
+
+All expenses (newest first), optionally filtered by member:
+`{ "expenses": [ ... ] }`
+
+### `POST /expenses`
+
+Records an expense. `teamMemberId` is required and must belong to the saraf;
+`currency` must be an active asset. No cash/account movement.
+
+```json
+{ "teamMemberId": "16fd7bec-…", "amount": 5000, "currency": "AFN", "note": "Shop rent" }
+```
+
+**Response `201`:** `{ "expense": { ... } }`
+
+### `GET /expenses/:id`
+
+Single expense: `{ "expense": { ... } }`
+
+### `DELETE /expenses/:id`
+
+Removes an expense. `204`.
 
 ---
 
@@ -1452,11 +1660,12 @@ P&L for the period, in AFN and translated to the reporting currency:
 ### `GET /reports/activity`
 
 The unified general-ledger feed: hawalas, settlements, customer transactions,
-and FX trades in one reverse-chronological stream.
+FX trades, and expenses in one reverse-chronological stream. Hawala rows show
+`senderName → receiverName` (no city codes) and carry both names as fields.
 
 | Query param | Description |
 |---|---|
-| `kind` | `hawala` \| `settle` \| `custtx` \| `fx` |
+| `kind` | `hawala` \| `settle` \| `custtx` \| `fx` \| `expense` |
 | `search` | matches titles, subtitles, hawala codes |
 | `from`, `to` | ISO date window |
 | `limit`, `offset` | pagination (default 100) |
@@ -1490,26 +1699,28 @@ and FX trades in one reverse-chronological stream.
       "ref": { "type": "fxTrade", "id": "0c320684-42ef-48df-b268-3744abbcd5b5" }
     }
   ],
-  "counts": { "all": 9, "hawala": 4, "settle": 1, "custtx": 3, "fx": 1 },
+  "counts": { "all": 9, "hawala": 4, "settle": 1, "custtx": 3, "fx": 1, "expense": 0 },
   "todaySummary": { "inflowAfn": 7180, "outflowAfn": 500, "netAfn": 6680 },
   "pagination": { "total": 9, "limit": 2, "offset": 0, "hasMore": true }
 }
 ```
 
-Hawala items additionally carry `status` and `code`; customer-transaction
-items carry `drcr` (`"CR"`/`"DR"`) and `ref.customerId`.
+Hawala items additionally carry `status`, `code`, `senderName`, and
+`receiverName`; customer-transaction items carry `drcr` (`"CR"`/`"DR"`) and
+`ref.customerId`; expense items carry `teamMemberId` and are always `out`.
 
 Two blocks power the Ledger tab's chrome and ignore the active filters:
 
 - **`counts`** — entries per kind across the whole feed, for the filter-chip
-  badges (All / Hawalas / Customer / FX / Settle).
+  badges (All / Hawalas / Customer / FX / Settle / Expenses).
 - **`todaySummary`** — today's money in / out / net in AFN-equivalent at
-  current sell rates. Only customer transactions (CR → in, DR → out) and
-  settlements (positive delta → in, negative → out) feed it: hawala and FX
-  rows are displayed unsigned in the ledger — a hawala moves the counterparty
-  position, and an FX trade swaps one drawer asset for another — so neither
-  counts as money in or out here. (Physical cash movement per currency lives
-  at [`GET /cash-drawer/today-movement`](#get-cash-drawertoday-movement).)
+  current sell rates. Customer transactions (CR → in, DR → out), settlements
+  (positive delta → in, negative → out), and expenses (always → out) feed it:
+  hawala and FX rows are displayed unsigned in the ledger — a hawala moves the
+  counterparty position, and an FX trade swaps one drawer asset for another — so
+  neither counts as money in or out here. Expenses feed the ribbon but never
+  move the cash drawer. (Physical cash movement per currency lives at
+  [`GET /cash-drawer/today-movement`](#get-cash-drawertoday-movement).)
 
 ### `GET /reports/ledger-statement?period=&kind=&from=&to=`
 
@@ -1642,7 +1853,7 @@ means re-requesting the listed reads after a successful write, then
 | **Add customer** (`addCustomerHtml`, also from pickers) | `POST /customers` (with `openingBalances`) — then select the returned `customer.id` in the in-progress flow |
 | **Customer detail** (`customerDetailHtml`) | `GET /customers/:id` · `GET /customers/:id/transactions` (running balances included) |
 | **Customer statement** (`statementHtml`) | `GET /customers/:id/statement?from=&to=` |
-| **New entry: You Received / You Gave** (`newCustTxHtml`, incl. convert toggle) | `POST /customers/:id/transactions` — plain, or with `conversion: { toCurrency, rate }` for cross-currency intake; suggested rate from `GET /rates` |
+| **New entry: You Received / You Gave** (`newCustTxHtml`, incl. convert toggle, photos) | `POST /customers/:id/transactions` — plain, or with `conversion: { toCurrency, rate }` for cross-currency intake; suggested rate from `GET /rates`; attach `photos: [ … ]` (up to 10 data URLs / URLs) |
 | **Transaction detail** (`customerTxDetailHtml`) — balance impact, conversion box | `GET /transactions/:id` (`balanceBefore` / `balanceAfter`, `conversion`) |
 | **Receipt share / copy** | `GET /transactions/:id/receipt` (preformatted text) |
 | **Delete entry** (`tx-delete`) | `DELETE /transactions/:id` → refetch customer detail |
@@ -1652,15 +1863,18 @@ means re-requesting the listed reads after a successful write, then
 | **Settle up** (`settleHtml`) | `POST /counterparties/:id/settle` (`settleCurrency`, `note`); rate preview from `GET /rates` |
 | **Branch statement** (`cpStatementHtml`) | `GET /counterparties/:id/statement?from=&to=` |
 | **Hawalas tab** (`pendingHtml`) — status/currency filters | `GET /hawalas?status=&currency=&search=` (badge count from `GET /hawalas/pending` or `dashboard.counts.pendingHawalas`) |
-| **New hawala** (`newHawalaHtml` + confirm) | `GET /hawalas/next-code` (code preview) · `GET /cities` · `GET /counterparties` · `GET /customers` (account-mode sender picker shows `balances`) · `POST /hawalas` on confirm — the server claims the real code, validates account balance (incl. commission), and writes the linked account debit atomically |
-| **Hawala detail** (`hawalaDetailHtml`) — timeline, financials | `GET /hawalas/:id` (`createdAt` → issued step, `paidAt` → paid step, `commissionMode` / `commissionAmount` → financials) |
-| **Mark Paid Out** | `POST /hawalas/:id/mark-paid` |
+| **New hawala** (`newHawalaHtml` + confirm, Send/Receive toggle) | `GET /hawalas/next-code` (send code preview) · `GET /counterparties` · `GET /customers` (account-mode sender picker shows `balances`) · `POST /hawalas` on confirm — send claims the real code and writes the linked account debit atomically; receive posts `type: "recv"` with the origin `code` and records it pending with no money movement. The route is auto-derived server-side (no city inputs needed) |
+| **Hawala detail** (`hawalaDetailHtml`) — timeline, financials | `GET /hawalas/:id` (`createdAt` → issued step, `paidAt` → paid/payout step, `commissionMode` / `commissionAmount` → financials, `payoutMethod` / `payoutCustomerId` → payout) |
+| **Pay Out** (`payoutSheetHtml` — cash or account) | `POST /hawalas/:id/mark-paid` with `{ method: "cash" }` or `{ method: "account", payoutCustomerId }` (credits `amount − fee` to the account) |
+| **Cancel hawala** (`confirmCancelHawala`) | `DELETE /hawalas/:id` — removes a pending hawala and reverses any linked account debit |
 | **FX form + confirm** (`fxFormHtml`, `confirmFxHtml`) | `GET /rates` (canonical-pair prefill) · `GET /cash-drawer` (stock check preview) · `POST /fx/trades` — server derives side, `toAmount`, realized P&L, and moves the drawer |
 | **FX ledger** (`fxLedgerHtml`) | `GET /fx/trades?limit=&offset=` · `GET /fx/positions` (qty, avg cost, unrealized P&L) |
 | **Rates screen / editor** (`ratesHtml`, `ratesOverlayHtml`, `editCashHtml`) | `GET /rates` · `PUT /rates` (send only changed assets; `prevSell` and `delta` come back computed) · `GET /rates/history?asset=` |
 | **Count Cash** (`cashCountHtml`) | `PUT /cash-drawer/count` — send only the assets actually counted; empty inputs are simply omitted |
 | **P&L screen** (`pnlScreenHtml`) | `GET /reports/pnl?period=today\|week\|month\|all` — `afn` + `reporting` blocks, `entries` for the breakdown list |
 | **Investments** (`investmentsScreenHtml`) | `GET /investments` — `equity` block fills the *Total invested / Current equity / Net return* headline · `POST /investments` from the add-modal (server moves the drawer too) |
+| **Team** (`teamScreenHtml`, `teamMemberDetailHtml`) — members + per-person expense totals | `GET /team` (rows with `expenseCount` / `expenseTotalReporting`) · `POST /team` (add member) · `GET /team/:id` (member with their expenses) |
+| **New expense** (`newExpenseHtml`, member picker) | `GET /team` (member picker) · `POST /expenses` (`teamMemberId`, `amount`, `currency`, `note`) — shows in the ledger as an outflow, drawer untouched |
 | **Assets** (`assetMgmtHtml`) | `GET /assets` · `PATCH /assets/:code/activation` (default assets return `422` on deactivation) |
 | **Default Currency** (`defaultsScreenHtml`) | `GET /settings` · `PUT /settings` |
 | **Daftar tab** (`shopHtml`) — profile, mini-stats, row subtitles | `GET /auth/me` · `GET /reports/dashboard` (`counts.entries`, `counts.counterparties + counts.customers` → Contacts) · `GET /reports/pnl?period=all` (P&L row subtitle) · `GET /investments` (Investments row subtitle) |
@@ -1682,6 +1896,8 @@ Where each field of the prototype's `state` object lives on the server:
 | `state.customers[]` (+ nested `transactions`) | `GET /customers`, `GET /customers/:id/transactions` |
 | `state.fxTrades[]` | `GET /fx/trades` |
 | `state.investments[]` | `GET /investments` |
+| `state.team[]` | `GET /team` (per-user, blank for a new saraf, resettable) |
+| `state.expenses[]` | `GET /expenses` (per-user, blank for a new saraf, resettable) |
 | UI-only: `tab`, `route`, pickers, `search`, filters, `fabTooltipSeen`, splash | stays client-side |
 
 Field-name conventions when mapping rows: server ids are UUIDs (not
